@@ -6,3 +6,4 @@ export interface QuickNodeEvent {
 
 export interface RiskResult { risk: number; flags: string[]; }
 export interface ScoreXResult { score: number; reasons: string[]; }
+
