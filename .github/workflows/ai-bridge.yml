@@ -1,0 +1,59 @@
+name: AI Commit Bridge
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  apply_patch:
+    if: >
+      startsWith(github.event.comment.body, '/apply-patch ') &&
+      (contains(vars.AI_BRIDGE_ALLOWED_ACTORS, github.actor) || github.actor == github.repository_owner)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract base64 patch from comment
+        id: extract
+        run: |
+          COMMENT="${{ github.event.comment.body }}"
+          PAYLOAD="${COMMENT#'/apply-patch '}"
+          echo "$PAYLOAD" | base64 -d > patch.diff
+          echo "Decoded patch to patch.diff"
+
+      - name: Show patch summary
+        run: |
+          head -n 50 patch.diff || true
+
+      - name: Apply patch
+        run: |
+          git config user.name "AI Commit Bridge"
+          git config user.email "ai-bridge@users.noreply.github.com"
+          git apply --index patch.diff
+
+      - name: Commit & push
+        run: |
+          if ! git diff --cached --quiet; then
+            MSG="$(date -u +'%Y-%m-%d %H:%M:%S') – AI Bridge patch"
+            git commit -m "$MSG"
+            git push
+            echo "changes_pushed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No changes to commit."
+          fi
+
+      - name: React with ✅
+        if: always()
+        uses: actions-ecosystem/action-add-comment@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          issue_number: ${{ github.event.issue.number }}
+          body: |
+            ✅ Patch verarbeitet von **${{ github.actor }}**.
+            - Repo: `${{ github.repository }}`
+            - Workflow: `${{ github.workflow }}`
+            - Resultat: ${{ steps.extract.outcome }}
