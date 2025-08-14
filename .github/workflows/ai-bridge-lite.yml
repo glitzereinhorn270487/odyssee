@@ -1,0 +1,98 @@
+name: AI Bridge Lite
+on:
+  issue_comment:
+    types: [created, edited]   # reagiert auch bei editiertem Kommentar
+  workflow_dispatch:
+    inputs:
+      path:
+        description: "File path to create/update"
+        required: true
+      content_b64:
+        description: "Base64 content for the file"
+        required: true
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug event
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Owner: ${{ github.repository_owner }}"
+          echo "Allowed: ${{ vars.AI_BRIDGE_ALLOWED_ACTORS }}"
+          echo "Comment body raw (may be empty on dispatch):"
+          echo "<<<${{ github.event.comment.body }}>>>"
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authorize (comment mode only)
+        if: ${{ github.event_name == 'issue_comment' }}
+        run: |
+          ALLOWED="${{ vars.AI_BRIDGE_ALLOWED_ACTORS }}"
+          ACTOR="${{ github.actor }}"
+          OWNER="${{ github.repository_owner }}"
+          if [ "$ACTOR" != "$OWNER" ] && [[ ",$ALLOWED," != *",$ACTOR,"* ]]; then
+            echo "NOT AUTHORIZED for $ACTOR"
+            exit 78
+          fi
+
+      - name: Parse command or inputs
+        id: parse
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            MODE="create"
+            FILEPATH="${{ github.event.inputs.path }}"
+            CONTENT="${{ github.event.inputs.content_b64 }}"
+          else
+            BODY="${{ github.event.comment.body }}"
+            if [[ "$BODY" =~ ^/create-file[[:space:]] ]]; then
+              MODE="create"
+              ARGS="${BODY#'/create-file '}"
+              FILEPATH=$(echo "$ARGS" | sed -n 's/.*path=\([^ ]*\).*/\1/p')
+              CONTENT=$(echo "$ARGS" | sed -n 's/.*content=\([^ ]*\).*/\1/p')
+            elif [[ "$BODY" =~ ^/apply-patch[[:space:]] ]]; then
+              MODE="patch"
+              CONTENT="${BODY#'/apply-patch '}"
+            else
+              echo "No valid command at start of comment. Exiting gracefully."
+              echo "SKIP=1" >> $GITHUB_ENV
+              exit 0
+            fi
+          fi
+
+          if [ -z "$MODE" ]; then echo "Missing MODE"; exit 1; fi
+          echo "MODE=$MODE" >> $GITHUB_ENV
+          if [ "$MODE" = "create" ]; then
+            if [ -z "$FILEPATH" ] || [ -z "$CONTENT" ]; then
+              echo "Missing path= or content="; exit 1
+            fi
+            echo "FILEPATH=$FILEPATH" >> $GITHUB_ENV
+            mkdir -p "$(dirname "$FILEPATH")"
+            echo "$CONTENT" | base64 -d > "$FILEPATH"
+            echo "Wrote file: $FILEPATH"
+          else
+            echo "$CONTENT" | base64 -d > patch.diff
+            head -n 20 patch.diff || true
+            git apply --index patch.diff
+          fi
+
+      - name: Commit & push (PR fallback on protected main)
+        if: env.SKIP != '1'
+        id: push
+        shell: bash
+        run: |
+          git config user.name "AI Commit Bridge"
+          git config user.email "ai-bridge@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            echo "push_result=none" >> $GITHUB_OUTPUT
+            exit 0
+          fi
