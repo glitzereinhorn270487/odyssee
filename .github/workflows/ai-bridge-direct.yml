@@ -1,0 +1,50 @@
+name: AI Bridge Direct
+on:
+  workflow_dispatch:
+    inputs:
+      path:
+        description: "File path to create/update"
+        required: true
+      content_b64:
+        description: "Base64 content for the file"
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write file from base64
+        run: |
+          FILEPATH="${{ github.event.inputs.path }}"
+          CONTENT="${{ github.event.inputs.content_b64 }}"
+          mkdir -p "$(dirname "$FILEPATH")"
+          echo "$CONTENT" | base64 -d > "$FILEPATH"
+          echo "Wrote file: $FILEPATH"
+
+      - name: Commit & push (PR fallback on protected main)
+        id: push
+        run: |
+          set -e
+          git config user.name "AI Bridge"
+          git config user.email "ai-bridge@users.noreply.github.com"
+          git add -A -f
+          if git diff --cached --quiet; then
+            echo "push_result=none" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          git commit -m "AI Bridge Direct change"
+          if git push origin HEAD:main; then
+            echo "push_result=direct" >> $GITHUB_OUTPUT
+          else
+            BRANCH="ai-bridge/${GITHUB_RUN_ID}"
+            git checkout -b "$BRANCH"
+            git push -u origin "$BRANCH"
+            echo "push_result=pr" >> $GITHUB_OUTPUT
+          fi
