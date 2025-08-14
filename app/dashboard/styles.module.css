@@ -1,4 +1,5 @@
-:root{
+:global(:root){
+
   --anth-dark:#1B1D21;
   --anth:#2B2E33;
   --glass: rgba(255,255,255,0.08);
