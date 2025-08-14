@@ -4,3 +4,4 @@ import type { RiskResult } from '../types';
 export async function checkRisk(mint: string): Promise<RiskResult> {
   return { risk: 0, flags: [] };
 }
+
