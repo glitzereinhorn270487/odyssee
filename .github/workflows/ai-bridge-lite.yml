@@ -2,51 +2,115 @@ name: AI Bridge Lite
 on:
   issue_comment:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      path:
+        description: "File path to create/update"
+        required: true
+      content_b64:
+        description: "Base64 content for the file"
+        required: true
 
 permissions:
   contents: write
+  issues: write
   pull-requests: write
 
 jobs:
-  create_file:
-    if: >
-      startsWith(github.event.comment.body, '/create-file ') &&
-      (
-        github.actor == github.repository_owner ||
-        contains(format(',{0},', vars.AI_BRIDGE_ALLOWED_ACTORS), format(',{0},', github.actor))
-      )
+  run:
     runs-on: ubuntu-latest
     steps:
+      - name: Debug event
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Owner: ${{ github.repository_owner }}"
+          echo "Allowed: ${{ vars.AI_BRIDGE_ALLOWED_ACTORS }}"
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Parse args
+      - name: Authorize (comment mode only)
+        if: ${{ github.event_name == 'issue_comment' }}
+        run: |
+          ALLOWED="${{ vars.AI_BRIDGE_ALLOWED_ACTORS }}"
+          ACTOR="${{ github.actor }}"
+          OWNER="${{ github.repository_owner }}"
+          if [ "$ACTOR" != "$OWNER" ] && [[ ",$ALLOWED," != *",$ACTOR,"* ]]; then
+            echo "NOT AUTHORIZED: $ACTOR"
+            echo "Tip: Add your username to Actions → Variables → AI_BRIDGE_ALLOWED_ACTORS"
+            exit 78
+          fi
+
+      - name: Parse inputs
         id: parse
         shell: bash
         run: |
-          COMMENT="${{ github.event.comment.body }}"
-          ARGS="${COMMENT#'/create-file '}"
-          FILEPATH=""
-          CONTENT=""
-          for kv in $ARGS; do
-            key="${kv%%=*}"
-            val="${kv#*=}"
-            if [ "$key" = "path" ]; then FILEPATH="$val"; fi
-            if [ "$key" = "content" ]; then CONTENT="$val"; fi
-          done
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            FILEPATH="${{ github.event.inputs.path }}"
+            CONTENT="${{ github.event.inputs.content_b64 }}"
+          else
+            COMMENT="${{ github.event.comment.body }}"
+            PREFIX="/create-file "
+            if [[ "$COMMENT" != $PREFIX* ]]; then
+              echo "No /create-file command. Skipping."
+              echo "SKIP=true" >> $GITHUB_ENV
+              exit 0
+            fi
+            ARGS="${COMMENT#"$PREFIX"}"
+            FILEPATH=$(echo "$ARGS" | sed -n 's/.*path=\([^ ]*\).*/\1/p')
+            CONTENT=$(echo "$ARGS" | sed -n 's/.*content=\([^ ]*\).*/\1/p')
+          fi
           if [ -z "$FILEPATH" ] || [ -z "$CONTENT" ]; then
             echo "Missing path= or content= (base64)"; exit 1
           fi
           echo "FILEPATH=$FILEPATH" >> $GITHUB_ENV
           mkdir -p "$(dirname "$FILEPATH")"
           echo "$CONTENT" | base64 -d > "$FILEPATH"
+          echo "Wrote file: $FILEPATH"
 
-      - name: Commit & push
+      - name: Commit & push to main
+        if: env.SKIP != 'true'
+        id: push
         shell: bash
         run: |
+          set -e
           git config user.name "AI Commit Bridge"
           git config user.email "ai-bridge@users.noreply.github.com"
           git add -A
-          git commit -m "AI Bridge Lite: create $FILEPATH" || echo "Nothing to commit"
-          git push || true
-          
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            echo "push_result=none" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          git commit -m "AI Bridge Lite: create/update $FILEPATH"
+          # Try direct push (may fail on protected branches)
+          if git push origin HEAD:main; then
+            echo "push_result=direct" >> $GITHUB_OUTPUT
+          else
+            echo "Direct push failed (likely branch protection). Creating PR..."
+            echo "push_result=pr" >> $GITHUB_OUTPUT
+            echo "BRANCH=ai-bridge/${{ github.run_id }}" >> $GITHUB_ENV
+            git checkout -b "ai-bridge/${{ github.run_id }}"
+            git push -u origin "ai-bridge/${{ github.run_id }}"
+          fi
+
+      - name: Create PR (fallback)
+        if: steps.push.outputs.push_result == 'pr'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: ${{ env.BRANCH }}
+          commit-message: "AI Bridge Lite: create/update ${{ env.FILEPATH }}"
+          title: "AI Bridge: create/update ${{ env.FILEPATH }}"
+          body: "Automated change via AI Bridge Lite workflow."
+
+      - name: Comment back (comment mode)
+        if: ${{ github.event_name == 'issue_comment' && env.SKIP != 'true' }}
+        uses: actions-ecosystem/action-add-comment@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          issue_number: ${{ github.event.issue.number }}
+          body: |
+            ✅ AI Bridge verarbeitet.
+            - Datei: `${{ env.FILEPATH }}`
+            - Ergebnis: `${{ steps.push.outputs.push_result }}`
+ 
