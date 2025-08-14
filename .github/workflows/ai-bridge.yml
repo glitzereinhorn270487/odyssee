@@ -75,12 +75,11 @@ jobs:
             echo "push_result=pr" >> $GITHUB_OUTPUT
           fi
 
-      - name: Comment back
+            - name: Comment back
         if: ${{ github.event_name == 'issue_comment' && env.SKIP != '1' }}
-        uses: actions-ecosystem/action-add-comment@v1
+        uses: peter-evans/create-or-update-comment@v4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          issue_number: ${{ github.event.issue.number }}
+          issue-number: ${{ github.event.issue.number }}
           body: |
             ✅ AI Bridge verarbeitet.
             - Modus: `${{ env.MODE }}`
