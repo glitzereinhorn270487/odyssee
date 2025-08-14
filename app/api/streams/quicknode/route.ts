@@ -1,6 +1,7 @@
-import { checkRisk } from '../../../lib/bot/risk/goplus';
-import { scoreX } from '../../../lib/bot/scorex/engine';
-import { log } from '../../../lib/bot/logger';
+import { checkRisk } from '../../../../lib/bot/risk/goplus';
+import { scoreX }    from '../../../../lib/bot/scorex/engine';
+import { log }       from '../../../../lib/bot/logger';
+
 
 export const runtime = 'edge';
 
