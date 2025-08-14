@@ -5,3 +5,4 @@ export function log(tag: string, payload: any) {
     console.log(`[${tag}]`, payloadi);
   }
 }
+
