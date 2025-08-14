@@ -1,59 +1,87 @@
 name: AI Commit Bridge
 on:
   issue_comment:
-    types: [created]
+    types: [created, edited]
 
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 jobs:
-  apply_patch:
-    if: >
-      startsWith(github.event.comment.body, '/apply-patch ') &&
-      (contains(vars.AI_BRIDGE_ALLOWED_ACTORS, github.actor) || github.actor == github.repository_owner)
+  bridge:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract base64 patch from comment
-        id: extract
+      # Owner ist immer erlaubt; weitere User optional via Variable AI_BRIDGE_ALLOWED_ACTORS
+      - name: Authorize
+        if: ${{ github.event_name == 'issue_comment' }}
         run: |
-          COMMENT="${{ github.event.comment.body }}"
-          PAYLOAD="${COMMENT#'/apply-patch '}"
-          echo "$PAYLOAD" | base64 -d > patch.diff
-          echo "Decoded patch to patch.diff"
-
-      - name: Show patch summary
-        run: |
-          head -n 50 patch.diff || true
-
-      - name: Apply patch
-        run: |
-          git config user.name "AI Commit Bridge"
-          git config user.email "ai-bridge@users.noreply.github.com"
-          git apply --index patch.diff
-
-      - name: Commit & push
-        run: |
-          if ! git diff --cached --quiet; then
-            MSG="$(date -u +'%Y-%m-%d %H:%M:%S') – AI Bridge patch"
-            git commit -m "$MSG"
-            git push
-            echo "changes_pushed=true" >> $GITHUB_OUTPUT
-          else
-            echo "No changes to commit."
+          ALLOWED="${{ vars.AI_BRIDGE_ALLOWED_ACTORS }}"
+          ACTOR="${{ github.actor }}"
+          OWNER="${{ github.repository_owner }}"
+          if [ "$ACTOR" != "$OWNER" ] && [[ ",$ALLOWED," != *",$ACTOR,"* ]]; then
+            echo "NOT AUTHORIZED: $ACTOR"
+            exit 78
           fi
 
-      - name: React with ✅
-        if: always()
+      - name: Parse command
+        id: parse
+        shell: bash
+        run: |
+          BODY="${{ github.event.comment.body }}"
+          if [[ "$BODY" =~ ^/apply-patch[[:space:]] ]]; then
+            MODE="patch"
+            echo "${BODY#'/apply-patch '}" | base64 -d > patch.diff
+            head -n 20 patch.diff || true
+            git apply --index patch.diff
+          elif [[ "$BODY" =~ ^/create-file[[:space:]] ]]; then
+            MODE="create"
+            ARGS="${BODY#'/create-file '}"
+            FILEPATH=$(echo "$ARGS" | sed -n 's/.*path=\([^ ]*\).*/\1/p')
+            CONTENT=$(echo "$ARGS" | sed -n 's/.*content=\([^ ]*\).*/\1/p')
+            if [ -z "$FILEPATH" ] || [ -z "$CONTENT" ]; then
+              echo "Missing path= or content="; exit 1
+            fi
+            mkdir -p "$(dirname "$FILEPATH")"
+            echo "$CONTENT" | base64 -d > "$FILEPATH"
+            echo "FILEPATH=$FILEPATH" >> $GITHUB_ENV
+          else
+            echo "SKIP=1" >> $GITHUB_ENV
+            exit 0
+          fi
+          echo "MODE=$MODE" >> $GITHUB_ENV
+
+      - name: Commit & push (PR fallback if main protected)
+        if: env.SKIP != '1'
+        id: push
+        run: |
+          git config user.name "AI Bridge"
+          git config user.email "ai-bridge@users.noreply.github.com"
+          git add -A -f
+          if git diff --cached --quiet; then
+            echo "push_result=none" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          git commit -m "AI Bridge change"
+          if git push origin HEAD:main; then
+            echo "push_result=direct" >> $GITHUB_OUTPUT
+          else
+            BRANCH="ai-bridge/${GITHUB_RUN_ID}"
+            git checkout -b "$BRANCH"
+            git push -u origin "$BRANCH"
+            echo "push_result=pr" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Comment back
+        if: ${{ github.event_name == 'issue_comment' && env.SKIP != '1' }}
         uses: actions-ecosystem/action-add-comment@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           issue_number: ${{ github.event.issue.number }}
           body: |
-            ✅ Patch verarbeitet von **${{ github.actor }}**.
-            - Repo: `${{ github.repository }}`
-            - Workflow: `${{ github.workflow }}`
-            - Resultat: ${{ steps.extract.outcome }}
+            ✅ AI Bridge verarbeitet.
+            - Modus: `${{ env.MODE }}`
+            - Ergebnis: `${{ steps.push.outputs.push_result }}`
