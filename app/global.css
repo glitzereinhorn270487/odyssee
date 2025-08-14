@@ -1,3 +1,4 @@
+/* Globale Design-Tokens + Grundstyles */
 :root{
   --anth-dark:#1B1D21;
   --anth:#2B2E33;
@@ -12,3 +13,17 @@
   --blur: 12px;
   --radius: 18px;
 }
+
+/* Grundlayout / Reset-Light */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: #111;           /* Fallback, Dashboard macht eigenen Background */
+  color: #E9EEF3;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+a { color: inherit; }
+
