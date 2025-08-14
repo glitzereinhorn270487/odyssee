@@ -9,3 +9,4 @@ export function scoreX(evt: any, risk: RiskResult): { score: number; reasons: st
   if (flags.length) reasons.push(`risk flags: ${ flags.join(', ') }`);
   return { score, reasons };
 }
+
