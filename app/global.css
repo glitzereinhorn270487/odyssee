@@ -1,0 +1,14 @@
+:root{
+  --anth-dark:#1B1D21;
+  --anth:#2B2E33;
+  --glass: rgba(255,255,255,0.08);
+  --glass-border: rgba(255,255,255,0.18);
+  --grad-start:#7AD8FF;
+  --grad-end:#22E4D2;
+  --success:#15C27A;
+  --danger:#FF5C5C;
+  --warn:#FFC857;
+  --shadow: 0 15px 40px rgba(0,0,0,.35);
+  --blur: 12px;
+  --radius: 18px;
+}
