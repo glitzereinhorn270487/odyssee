@@ -83,16 +83,49 @@ jobs:
             git apply --index patch.diff
           fi
 
-      - name: Commit & push (PR fallback on protected main)
-        if: env.SKIP != '1'
+            - name: Commit & push (PR fallback on protected main)
         id: push
         shell: bash
         run: |
+          set -e
+          echo "---- git status (vor write) ----"
+          git status --porcelain=v1 -uall || true
+
+          echo "---- Listing root & .github ----"
+          ls -la || true
+          ls -la .github || true
+
+          if [ -n "${FILEPATH:-}" ] && [ -f "$FILEPATH" ]; then
+            echo "---- File exists, first bytes ----"
+            head -c 64 "$FILEPATH" | xxd || true
+          fi
+
           git config user.name "AI Commit Bridge"
           git config user.email "ai-bridge@users.noreply.github.com"
-          git add -A
+
+          echo "---- .gitignore (erste 120 Zeilen) ----"
+          [ -f .gitignore ] && sed -n '1,120p' .gitignore || echo "(keine .gitignore)"
+
+          # Wichtig: -f = force (ignoriert .gitignore)
+          git add -A -f
+
+          echo "---- git status (nach add -f) ----"
+          git status --porcelain=v1 -uall || true
+
           if git diff --cached --quiet; then
             echo "Nothing to commit."
             echo "push_result=none" >> $GITHUB_OUTPUT
             exit 0
+          fi
+
+          git commit -m "AI Bridge change"
+
+          # Direkt auf main pushen; bei Schutz -> PR-Fallback
+          if git push origin HEAD:main; then
+            echo "push_result=direct" >> $GITHUB_OUTPUT
+          else
+            BRANCH="ai-bridge/${GITHUB_RUN_ID}"
+            git checkout -b "$BRANCH"
+            git push -u origin "$BRANCH"
+            echo "push_result=pr" >> $GITHUB_OUTPUT
           fi
