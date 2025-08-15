@@ -39,7 +39,11 @@ function parseEvent(payload:any): ParsedEvt {
 export async function POST(req: Request) {
   // 1) HMAC prüfen (Streams Security Token)
   const v = await verifyQuickNode(req);
-  if (!v.ok) return new NextResponse(null, { status: 401 });
+  if (!v.ok) return new NextResponse(JSON.stringify({ ok:false, reason: v.reason||'verify_failed' }), {
+  status: 401,
+  headers: { 'content-type':'application/json' }
+});
+
 
   // 2) Payload parsen (wir nutzen den verifizierten Klartext)
   let payload:any = {};
