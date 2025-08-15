@@ -16,27 +16,13 @@ const fmtUSD = (n: number) => n.toLocaleString(undefined, { style: 'currency', c
 const fmtNum = (n: number) => n.toLocaleString();
 function classNames(...xs: Array<string | false | undefined>) { return xs.filter(Boolean).join(' '); }
 
-// --- Mockdaten für Tabellen (werden im nächsten Patch via API ersetzt) ---
-const mockOpen: Position[] = [
-  { id:'pos_1', chain:'SOL', name:'CATCOIO', category:'meme', narrative:null, mcap:1250000, volume:980000, investment:120, pnlUSD:34.5, taxUSD:1.23,
-    holders:1403, txCount:{ buy:230, sell:180 }, scores:{ scorex:72.4, risk:18, fomo:64, pumpDumpProb:0.22 },
-    links:{ telegram:'https://t.me/example', dexscreener:'https://dexscreener.com/solana/xyz' } },
-  { id:'pos_2', chain:'SOL', name:'DOGEGOD', category:'meme', narrative:null, mcap:845000, volume:2100000, investment:90, pnlUSD:-12.7, taxUSD:0.0,
-    holders:803, txCount:{ buy:120, sell:150 }, scores:{ scorex:58.2, risk:35, fomo:52, pumpDumpProb:0.33 },
-    links:{ telegram:'https://t.me/example2', dexscreener:'https://dexscreener.com' } },
-];
-const mockClosed: Position[] = [
-  { id:'pos_3', chain:'SOL', name:'FROGZ', category:'meme', narrative:null, mcap:2300000, volume:4500000, investment:110, pnlUSD:220.1, taxUSD:6.6,
-    holders:2004, txCount:{ buy:410, sell:390 }, scores:{ scorex:81.1, risk:12, fomo:70, pumpDumpProb:0.18 },
-    links:{ telegram:'https://t.me/frogz', dexscreener:'https://dexscreener.com/solana/frogz' } },
-];
-
 export default function DashboardPage() {
   const [botStatus, setBotStatus] = useState<'OFF'|'PAPER'|'LIVE'>('OFF');
   const [level, setLevel] = useState<'low'|'mid'|'high'>('low');
   const [showSettings, setShowSettings] = useState(false);
   const [detail, setDetail] = useState<Position | null>(null);
   const [timeWindow, setTimeWindow] = useState<'30m'|'1h'|'6h'|'12h'|'24h'>('1h');
+
   const [sortKey, setSortKey] = useState<SortKey>('pnlUSD');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
@@ -45,11 +31,14 @@ export default function DashboardPage() {
   const [pnl24h, setPnl24h] = useState<number>(42.70);
   const [traffic, setTraffic] = useState<{ color:'green'|'yellow'|'red'; winrate:number; factor:number }>({ color:'green', winrate:0.62, factor:1.8 });
 
-  // Tabellen (noch Mock)
-  const openPositions = useMemo(() => sortPositions(mockOpen, sortKey, sortDir), [sortKey, sortDir]);
-  const closedPositions = useMemo(() => sortPositions(mockClosed, sortKey, sortDir), [sortKey, sortDir]);
+  // Tabellen (API)
+  const [openPositions, setOpenPositions] = useState<Position[]>([]);
+  const [closedPositions, setClosedPositions] = useState<Position[]>([]);
 
-  // --- API: Initial laden ---
+  const openSorted = useMemo(() => sortPositions(openPositions, sortKey, sortDir), [openPositions, sortKey, sortDir]);
+  const closedSorted = useMemo(() => sortPositions(closedPositions, sortKey, sortDir), [closedPositions, sortKey, sortDir]);
+
+  // Initial laden
   useEffect(() => {
     (async () => {
       try {
@@ -68,22 +57,89 @@ export default function DashboardPage() {
         const a = await fetch('/api/analytics/trafficlight', { cache: 'no-store' }).then(r => r.json());
         setTraffic(a);
       } catch {}
+      // Positionslisten (offen/geschlossen)
+      try {
+        const o = await fetch('/api/positions?status=open', { cache: 'no-store' }).then(r => r.json());
+        setOpenPositions((o.items ?? o) as Position[]);
+      } catch {}
+      try {
+        const c = await fetch('/api/positions?status=closed', { cache: 'no-store' }).then(r => r.json());
+        setClosedPositions((c.items ?? c) as Position[]);
+      } catch {}
     })();
   }, []);
 
-  // --- Handlers Start/Stop ---
+  // Start/Stop
   async function handleStart() {
     const res = await fetch('/api/bot/start', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ level })});
-    const data = await res.json();
-    setBotStatus(data.status); setLevel(data.level ?? 'low');
+    const data = await res.json(); setBotStatus(data.status); setLevel(data.level ?? 'low');
   }
   async function handleStop() {
     const res = await fetch('/api/bot/stop', { method: 'POST' });
-    const data = await res.json();
-    setBotStatus(data.status);
+    const data = await res.json(); setBotStatus(data.status);
   }
 
-  useEffect(() => { if (!detail) setTimeWindow('1h'); }, [detail]);
+  // Row-Klick → Detail laden
+  async function openDetail(p: Position) {
+    try {
+      const d = await fetch(`/api/positions/${encodeURIComponent(p.id)}?timeWindow=${timeWindow}`, { cache: 'no-store' }).then(r => r.json());
+      const merged: Position = {
+        ...p,
+        holders: d.holders ?? p.holders,
+        txCount: d.tx_count ? { buy: d.tx_count.buy ?? 0, sell: d.tx_count.sell ?? 0 } : p.txCount,
+        scores: d.scores ? {
+          scorex: d.scores.scorex ?? p.scores?.scorex ?? 0,
+          risk: d.scores.risk ?? p.scores?.risk ?? 0,
+          fomo: d.scores.fomo ?? p.scores?.fomo ?? 0,
+          pumpDumpProb: d.scores.pump_dump_prob ?? p.scores?.pumpDumpProb ?? 0
+        } : p.scores,
+        links: d.links ? { telegram: d.links.telegram, dexscreener: d.links.dexscreener } : p.links
+      };
+      setDetail(merged);
+    } catch {
+      setDetail(p);
+    }
+  }
+  // Zeitfenster geändert → erneut laden
+  useEffect(() => {
+    if (!detail) return;
+    (async () => {
+      try {
+        const d = await fetch(`/api/positions/${encodeURIComponent(detail.id)}?timeWindow=${timeWindow}`, { cache: 'no-store' }).then(r => r.json());
+        setDetail(cur => cur ? {
+          ...cur,
+          holders: d.holders ?? cur.holders,
+          txCount: d.tx_count ? { buy: d.tx_count.buy ?? 0, sell: d.tx_count.sell ?? 0 } : cur.txCount,
+          scores: d.scores ? {
+            scorex: d.scores.scorex ?? cur.scores?.scorex ?? 0,
+            risk: d.scores.risk ?? cur.scores?.risk ?? 0,
+            fomo: d.scores.fomo ?? cur.scores?.fomo ?? 0,
+            pumpDumpProb: d.scores.pump_dump_prob ?? cur.scores?.pumpDumpProb ?? 0
+          } : cur.scores,
+          links: d.links ? { telegram: d.links.telegram, dexscreener: d.links.dexscreener } : cur.links
+        } : cur);
+      } catch {}
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeWindow]);
+
+  // Sell
+  async function handleSell(id: string) {
+    const res = await fetch(`/api/positions/${encodeURIComponent(id)}/sell`, { method: 'POST' });
+    const ok = (await res.json())?.ok;
+    if (ok) {
+      // Move from open → closed (stub)
+      setOpenPositions(list => list.filter(x => x.id !== id));
+      setClosedPositions(list => {
+        const found = openPositions.find(x => x.id === id);
+        return found ? [{ ...found }, ...list] : list;
+      });
+      setDetail(null);
+      alert('Verkauf ausgelöst (Stub)'); // TODO: toast
+    } else {
+      alert('Sell fehlgeschlagen');
+    }
+  }
 
   return (
     <div className={styles.page}>
@@ -99,11 +155,23 @@ export default function DashboardPage() {
       <div className={styles.grid}>
         <div className={styles.mainCol}>
           <Panel title="Offene Positionen">
-            <PositionsTable items={openPositions} onRowClick={setDetail} sortKey={sortKey} sortDir={sortDir} onSort={k => handleSort(setSortKey, setSortDir, sortKey, sortDir, k)} />
+            <PositionsTable
+              items={openSorted}
+              onRowClick={openDetail}
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={k => handleSort(setSortKey, setSortDir, sortKey, sortDir, k)}
+            />
           </Panel>
 
           <Panel title="Geschlossene Positionen" className={styles.mt12}>
-            <PositionsTable items={closedPositions} onRowClick={setDetail} sortKey={sortKey} sortDir={sortDir} onSort={k => handleSort(setSortKey, setSortDir, sortKey, sortDir, k)} />
+            <PositionsTable
+              items={closedSorted}
+              onRowClick={openDetail}
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={k => handleSort(setSortKey, setSortDir, sortKey, sortDir, k)}
+            />
           </Panel>
 
           <div className={styles.footerRow}>
@@ -112,12 +180,8 @@ export default function DashboardPage() {
         </div>
 
         <div className={styles.sideCol}>
-          <Card title="Freies Kapital">
-            <div className={styles.valueBig}>{fmtUSD(freeUSD)}</div>
-          </Card>
-
+          <Card title="Freies Kapital"><div className={styles.valueBig}>{fmtUSD(freeUSD)}</div></Card>
           <TrafficLightCard className={styles.mt12} winrate={traffic.winrate} factor={traffic.factor} color={traffic.color} />
-
           <Card title="PnL (24h)" className={styles.mt12}>
             <div className={classNames(styles.valueMed, ' ', pnl24h >= 0 ? styles.positive : styles.negative)}>
               {pnl24h >= 0 ? '+' : ''} {fmtUSD(Math.abs(pnl24h))}
@@ -127,7 +191,16 @@ export default function DashboardPage() {
       </div>
 
       {showSettings && (<SettingsModal onClose={() => setShowSettings(false)} />)}
-      {detail && (<DetailDrawer position={detail} timeWindow={timeWindow} onTimeWindow={setTimeWindow} onClose={() => setDetail(null)} onSell={() => alert('Sell Position (TODO API)')} />)}
+
+      {detail && (
+        <DetailDrawer
+          position={detail}
+          timeWindow={timeWindow}
+          onTimeWindow={setTimeWindow}
+          onClose={() => setDetail(null)}
+          onSell={() => handleSell(detail.id)}
+        />
+      )}
     </div>
   );
 }
@@ -148,7 +221,7 @@ function sortPositions(items: Position[], key: SortKey, dir: SortDir) {
   return arr;
 }
 
-// ------- UI (unverändert zur vorherigen Version) -------
+// ------- UI (wie gehabt) -------
 function TopBar(props: {
   status: 'OFF'|'PAPER'|'LIVE'; level: 'low'|'mid'|'high';
   setLevel: (v:any)=>void; onStart: ()=>void; onStop: ()=>void; onOpenSettings: ()=>void;
@@ -162,9 +235,7 @@ function TopBar(props: {
         <div className={styles.level}>
           <span className={styles.badge}>Investmentstufe</span>
           <select className={styles.select} value={level} onChange={e => setLevel(e.target.value as any)}>
-            <option value="low">Paper / Low</option>
-            <option value="mid">Live / Mid</option>
-            <option value="high">Live / High</option>
+            <option value="low">Paper / Low</option><option value="mid">Live / Mid</option><option value="high">Live / High</option>
           </select>
         </div>
       </div>
@@ -252,178 +323,33 @@ function PositionsTable(props: {
 }
 
 function DetailDrawer(props: {
-  position: Position;
-  timeWindow: '30m' | '1h' | '6h' | '12h' | '24h';
-  onTimeWindow: (w: any) => void;
-  onClose: () => void;
-  onSell: () => void;
+  position: Position; timeWindow: '30m'|'1h'|'6h'|'12h'|'24h';
+  onTimeWindow: (w:any)=>void; onClose: ()=>void; onSell: ()=>void;
 }) {
   const { position: p, timeWindow, onTimeWindow, onClose, onSell } = props;
   return (
     <div className={styles.modalOverlay} onClick={onClose}>
-      <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+      <div className={styles.modal} onClick={e => e.stopPropagation()}>
         <div className={styles.modalHeader}>
-          <div className={styles.modalTitle}>
-            {p.name} <span className={styles.badge}>{p.chain}</span>
-          </div>
+          <div className={styles.modalTitle}>{p.name} <span className={styles.badge}>{p.chain}</span></div>
           <div className={styles.modalActions}>
-            <select
-              className={styles.select}
-              value={timeWindow}
-              onChange={(e) => onTimeWindow(e.target.value)}
-            >
-              <option value="30m">letzte 30 Min</option>
-              <option value="1h">letzte Stunde</option>
-              <option value="6h">vor 6 Stunden</option>
-              <option value="12h">vor 12 Stunden</option>
+            <select className={styles.select} value={timeWindow} onChange={e => onTimeWindow(e.target.value)}>
+              <option value="30m">letzte 30 Min</option><option value="1h">letzte Stunde</option>
+              <option value="6h">vor 6 Stunden</option><option value="12h">vor 12 Stunden</option>
               <option value="24h">vor 24 Stunden</option>
             </select>
-            <button className={classNames(styles.btn, styles.btnSell)} onClick={onSell}>
-              Sell Position
-            </button>
-            <button className={classNames(styles.btn)} onClick={onClose}>
-              Schließen
-            </button>
+            <button className={classNames(styles.btn, styles.btnSell)} onClick={onSell}>Sell Position</button>
+            <button className={classNames(styles.btn)} onClick={onClose}>Schließen</button>
           </div>
         </div>
-
         <div className={styles.modalBody}>
           <div className={styles.detailGrid}>
-            <div>
-              <span className={styles.dim}>Kategorie</span>
-              <div>{p.category}</div>
-            </div>
-            <div>
-              <span className={styles.dim}>Narrative</span>
-              <div>{p.narrative ?? '—'}</div>
-            </div>
-            <div>
-              <span className={styles.dim}>Marketcap</span>
-              <div>{fmtNum(p.mcap)}</div>
-            </div>
-            <div>
-              <span className={styles.dim}>Volumen</span>
-              <div>{fmtNum(p.volume)}</div>
-            </div>
-            <div>
-              <span className={styles.dim}>Investmenthöhe</span>
-              <div>{fmtUSD(p.investment)}</div>
-            </div>
-            <div>
-              <span className={styles.dim}>G/V ($)</span>
-              <div className={p.pnlUSD >= 0 ? styles.positive : styles.negative}>
-                {fmtUSD(p.pnlUSD)}
-              </div>
-            </div>
-            <div>
-              <span className={styles.dim}>TAX</span>
-              <div>{fmtUSD(p.taxUSD)}</div>
-            </div>
-            <div>
-              <span className={styles.dim}>Holderanzahl</span>
-              <div>{fmtNum(p.holders ?? 0)}</div>
-            </div>
-            <div>
-              <span className={styles.dim}>Transaktionen</span>
-              <div>
-                Buy {p.txCount?.buy ?? 0} • Sell {p.txCount?.sell ?? 0}
-              </div>
-            </div>
-            <div>
-              <span className={styles.dim}>ScoreX</span>
-              <div>{p.scores?.scorex ?? '—'}</div>
-            </div>
-            <div>
-              <span className={styles.dim}>RiskScore</span>
-              <div>{p.scores?.risk ?? '—'}</div>
-            </div>
-            <div>
-              <span className={styles.dim}>FomoScore</span>
-              <div>{p.scores?.fomo ?? '—'}</div>
-            </div>
-            <div>
-              <span className={styles.dim}>P&D Wahrscheinlichkeit</span>
-              <div>{(p.scores?.pumpDumpProb ?? 0).toFixed(2)}</div>
-            </div>
-            <div>
-              <span className={styles.dim}>Links</span>
-              <div className={styles.linkList}>
-                {p.links?.telegram && (
-                  <a href={p.links.telegram} target="_blank">Telegram</a>
-                )}
-                {p.links?.dexscreener && (
-                  <a href={p.links.dexscreener} target="_blank">DexScreener</a>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-
-function SettingsModal(props: { onClose: () => void }) {
-  const [global, setGlobal] = useState(true);
-  const [cats, setCats] = useState({ signals: true, buy: true, sell: true, startstop: true, risk: true, pnl: true });
-  const [events, setEvents] = useState({ newSignal: true, entry: true, exit: true, stopLoss: true, warning: true, dailyPnl: true });
-
-  function save() { /* TODO: POST /api/settings/telegram */ props.onClose(); }
-
-  return (
-    <div className={styles.modalOverlay} onClick={props.onClose}>
-      <div className={[styles.modal, styles.glassy].join(' ')} onClick={e => e.stopPropagation()}>
-        <div className={styles.modalHeader}>
-          <div className={styles.modalTitle}>Einstellungen • Telegram</div>
-          <div className={styles.modalActions}>
-            <button className={classNames(styles.btn)} onClick={props.onClose}>Abbrechen</button>
-            <button className={classNames(styles.btn, styles.btnStart)} onClick={save}>Speichern</button>
-          </div>
-        </div>
-        <div className={styles.modalBody}>
-          <div className={styles.settingsGrid}>
-            <div className={styles.settingsCard}>
-              <div className={styles.cardTitle}>Global</div>
-              <label className={styles.switch}><input type="checkbox" checked={global} onChange={e => setGlobal(e.target.checked)} /><span>Alle Benachrichtigungen</span></label>
-            </div>
-            <div className={styles.settingsCard}>
-              <div className={styles.cardTitle}>Rubriken</div>
-              {Object.entries(cats).map(([k,v]) => (
-                <label key={k} className={styles.switch}><input type="checkbox" checked={v} onChange={e => setCats({ ...cats, [k]: e.target.checked })} /><span>{k}</span></label>
-              ))}
-            </div>
-            <div className={styles.settingsCard}>
-              <div className={styles.cardTitle}>Einzelevents</div>
-              {Object.entries(events).map(([k,v]) => (
-                <label key={k} className={styles.switch}><input type="checkbox" checked={v} onChange={e => setEvents({ ...events, [k]: e.target.checked })} /><span>{k}</span></label>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TaxExportPanel() {
-  const [range, setRange] = useState<'30d'|'90d'|'ytd'|'custom'>('30d');
-  function download() {
-    // ruft unsere API und lädt Text herunter
-    const url = `/api/tax/export`; // (from/to optional)
-    const a = document.createElement('a');
-    a.href = url; a.download = `tax-export-${range}.txt`; a.click();
-  }
-  return (
-    <div className={styles.taxPanel}>
-      <div>
-        <div className={styles.cardTitle}>Steuer-Export</div>
-        <select className={styles.select} value={range} onChange={e => setRange(e.target.value as any)}>
-          <option value="30d">Letzter Monat</option><option value="90d">Letzte 90 Tage</option>
-          <option value="ytd">YTD</option><option value="custom">Benutzerdefiniert</option>
-        </select>
-      </div>
-      <button className={classNames(styles.btn, styles.btnStart)} onClick={download}>Download</button>
-    </div>
-  );
-}
+            <div><span className={styles.dim}>Kategorie</span><div>{p.category}</div></div>
+            <div><span className={styles.dim}>Narrative</span><div>{p.narrative ?? '—'}</div></div>
+            <div><span className={styles.dim}>Marketcap</span><div>{fmtNum(p.mcap)}</div></div>
+            <div><span className={styles.dim}>Volumen</span><div>{fmtNum(p.volume)}</div></div>
+            <div><span className={styles.dim}>Investmenthöhe</span><div>{fmtUSD(p.investment)}</div></div>
+            <div><span className={styles.dim}>G/V ($)</span><div className={p.pnlUSD >= 0 ? styles.positive : styles.negative}>{fmtUSD(p.pnlUSD)}</div></div>
+            <div><span className={styles.dim}>TAX</span><div>{fmtUSD(p.taxUSD)}</div></div>
+            <div><span className={styles.dim}>Holderanzahl</span><div>{fmtNum(p.holders ?? 0)}</div></div>
+            <div><span className={
