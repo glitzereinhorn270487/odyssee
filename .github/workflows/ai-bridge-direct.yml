@@ -1,50 +1,69 @@
-name: AI Bridge Direct
+name: AI Bridge Direct (Templates)
+
 on:
   workflow_dispatch:
     inputs:
-      path:
-        description: "File path to create/update"
+      mode:
+        description: create | update | upsert
         required: true
-      content_b64:
-        description: "Base64 content for the file"
+        default: upsert
+      filepath:
+        description: Path to write in the repo
+        required: true
+      content:
+        description: Raw content OR template key starting with T0_
         required: true
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
-  run:
+  apply:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Write file from base64
+      - name: Resolve template and write file
         run: |
-          FILEPATH="${{ github.event.inputs.path }}"
-          CONTENT="${{ github.event.inputs.content_b64 }}"
-          mkdir -p "$(dirname "$FILEPATH")"
-          echo "$CONTENT" | base64 -d > "$FILEPATH"
-          echo "Wrote file: $FILEPATH"
+          set -euo pipefail
+          MODE="${{ github.event.inputs.mode }}"
+          FILEPATH="${{ github.event.inputs.filepath }}"
+          CONTENT_INPUT="${{ github.event.inputs.content }}"
+          CONTENT="$CONTENT_INPUT"
 
-      - name: Commit & push (PR fallback on protected main)
-        id: push
+          # Falls CONTENT wie ein Template-Key aussieht, Datei aus templates/ laden
+          if [[ "$CONTENT_INPUT" =~ ^T0_ ]]; then
+            TPL_DIR=".github/ai-bridge/templates"
+            # 1) exakter Dateiname
+            if [[ -f "$TPL_DIR/$CONTENT_INPUT" ]]; then
+              CONTENT="$(cat "$TPL_DIR/$CONTENT_INPUT")"
+            else
+              # 2) gängige Endungen durchprobieren
+              for ext in ts tsx js json txt md; do
+                if [[ -f "$TPL_DIR/$CONTENT_INPUT.$ext" ]]; then
+                  CONTENT="$(cat "$TPL_DIR/$CONTENT_INPUT.$ext")"
+                  break
+                fi
+              done
+            fi
+          fi
+
+          mkdir -p "$(dirname "$FILEPATH")"
+          printf "%s" "$CONTENT" > "$FILEPATH"
+
+      - name: Commit & Push
         run: |
           set -e
-          git config user.name "AI Bridge"
+          git config user.name "AI Commit Bridge"
           git config user.email "ai-bridge@users.noreply.github.com"
-          git add -A -f
+          git add -A
           if git diff --cached --quiet; then
-            echo "push_result=none" >> $GITHUB_OUTPUT
+            echo "Nothing to commit."
             exit 0
           fi
-          git commit -m "AI Bridge Direct change"
-          if git push origin HEAD:main; then
-            echo "push_result=direct" >> $GITHUB_OUTPUT
-          else
-            BRANCH="ai-bridge/${GITHUB_RUN_ID}"
-            git checkout -b "$BRANCH"
-            git push -u origin "$BRANCH"
-            echo "push_result=pr" >> $GITHUB_OUTPUT
-          fi
+          MSG="bridge: ${{ github.event.inputs.mode }} ${{ github.event.inputs.filepath }}"
+          git commit -m "$MSG"
+          git push
