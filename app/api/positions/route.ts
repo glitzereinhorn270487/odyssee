@@ -1,27 +1,47 @@
 import { NextResponse } from 'next/server';
-export const runtime = 'nodejs';
 
-const open = [
-  {
-    id:'pos_1', chain:'SOL', name:'CATCOIO', category:'meme', narrative:null,
-    mcap:1250000, volume:980000, investment:120, pnlUSD:34.5, taxUSD:1.23
-  },
-  {
-    id:'pos_2', chain:'SOL', name:'DOGEGOD', category:'meme', narrative:null,
-    mcap:845000, volume:2100000, investment:90, pnlUSD:-12.7, taxUSD:0.0
-  },
-];
+export async function GET() {
+  const positions = [
+    {
+      id: '1',
+      name: 'SOL/USDT',
+      chain: 'Solana',
+      category: 'Layer1',
+      narrative: 'DeFi',
+      mcap: 9500000000,
+      volume: 250000000,
+      investment: 5000,
+      pnlUSD: 1250,
+      taxUSD: 50,
+      holders: 12000,
+      txCount: { buy: 45, sell: 12 },
+      scores: { scorex: 85, risk: 15, fomo: 70, pumpDumpProb: 0.15 },
+      links: {
+        telegram: 'https://t.me/solana',
+        dexscreener: 'https://dexscreener.com/solana'
+      }
+    },
+    {
+      id: '2',
+      name: 'BONK/USDT',
+      chain: 'Solana',
+      category: 'Meme',
+      narrative: 'Community',
+      mcap: 350000000,
+      volume: 20000000,
+      investment: 200,
+      pnlUSD: -35,
+      taxUSD: 5,
+      holders: 5000,
+      txCount: { buy: 12, sell: 4 },
+      scores: { scorex: 65, risk: 35, fomo: 50, pumpDumpProb: 0.4 },
+      links: {
+        telegram: 'https://t.me/bonk',
+        dexscreener: 'https://dexscreener.com/bonk'
+      }
+    }
+  ];
 
-const closed = [
-  {
-    id:'pos_3', chain:'SOL', name:'FROGZ', category:'meme', narrative:null,
-    mcap:2300000, volume:4500000, investment:110, pnlUSD:220.1, taxUSD:6.6
-  },
-];
-
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const status = url.searchParams.get('status') ?? 'open';
-  const items = status === 'closed' ? closed : open;
-  return NextResponse.json({ items, nextCursor: null });
+  return NextResponse.json(positions);
 }
+
