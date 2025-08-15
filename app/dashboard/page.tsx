@@ -124,10 +124,12 @@ function sortPositions(items:Position[],key:SortKey,dir:SortDir){
 // UI Bits...
 function TopBar(p:{status:'OFF'|'PAPER'|'LIVE';level:'low'|'mid'|'high';setLevel:(v:any)=>void;onStart:()=>void;onStop:()=>void;onOpenSettings:()=>void;onOpenPolicy:()=>void;}){
   const {status,level,setLevel,onStart,onStop,onOpenSettings,onOpenPolicy}=p;
-  return <div className={styles.topbar}>
+   return <div className={styles.topbar}>
     <div className={styles.leftGroup}>
-      <button className={classNames(styles.btn,styles.btnStart)} onClick={onStart} disabled={status!=='OFF'}>Agent starten</button>
-      <button className={classNames(styles.btn,styles.btnStop)} onClick={onStop} disabled={status==='OFF'}>Agent stoppen</button>
+      <button className={classNames(styles.btn,styles.btnStart)} onClick={onStart} disabled={status!=='OFF'}>Agent starten</button><AgentStatusBadge />
+
+      <button className={classNames(styles.btn,styles.btnStop)} onClick={onStop} disabled={status==='OFF'}>Agent stoppen</button><AgentStatusBadge />
+
       <div className={styles.level}><span className={styles.badge}>Investmentstufe</span>
         <select className={styles.select} value={level} onChange={(e)=>setLevel(e.target.value as any)}>
           <option value="low">Paper / Low</option><option value="mid">Live / Mid</option><option value="high">Live / High</option>
