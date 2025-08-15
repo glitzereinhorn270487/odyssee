@@ -1,8 +1,7 @@
-const KEY = 'px:solusd';
-const TTL_MS = 60_000;
+const TTL = 60_000;
+let cache: { t: number; v: number } | null = null;
 
-async function fetchSolUsd(): Promise<number> {
-  // Server-side fetch ok on Vercel
+async function fetchSol(): Promise<number> {
   try {
     const r = await fetch('https://price.jup.ag/v4/price?ids=SOL', { cache: 'no-store' });
     const j = await r.json();
@@ -18,12 +17,10 @@ async function fetchSolUsd(): Promise<number> {
   return 0;
 }
 
-let cache: { v: number; t: number } | null = null;
-
 export async function getSolUsd(): Promise<number> {
   const now = Date.now();
-  if (cache && (now - cache.t) < TTL_MS && cache.v > 0) return cache.v;
-  const v = await fetchSolUsd();
-  cache = { v, t: now };
+  if (cache && (now - cache.t) < TTL && cache.v > 0) return cache.v;
+  const v = await fetchSol();
+  cache = { t: now, v };
   return v;
 }
