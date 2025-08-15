@@ -238,7 +238,7 @@ export default function DashboardPage() {
             <div className={styles.valueBig}>{fmtUSD(freeUSD)}</div>
           </Card>
 
-        <TrafficLightCard
+          <TrafficLightCard
             className={styles.mt12}
             winrate={traffic.winrate}
             factor={traffic.factor}
@@ -328,7 +328,7 @@ function TopBar(props: {
         >
           Agent stoppen
         </button>
-               <div className={styles.level}>
+        <div className={styles.level}>
           <span className={styles.badge}>Investmentstufe</span>
           <select
             className={styles.select}
@@ -589,64 +589,118 @@ function SettingsModal(props: { onClose: () => void }) {
     warning: true,
     dailyPnl: true,
   });
-  function save() {
-    /* TODO: POST /api/settings/telegram */
-    props.onClose();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Settings laden
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = await fetch('/api/settings/telegram', { cache: 'no-store' }).then((r) => r.json());
+        if (typeof s?.global === 'boolean') setGlobal(!!s.global);
+        if (s?.categories) {
+          setCats({
+            signals: !!s.categories.signals,
+            buy: !!s.categories.buy,
+            sell: !!s.categories.sell,
+            startstop: !!s.categories.startstop,
+            risk: !!s.categories.risk,
+            pnl: !!s.categories.pnl,
+          });
+        }
+        if (s?.events) {
+          setEvents({
+            newSignal: !!s.events.newSignal,
+            entry: !!s.events.entry,
+            exit: !!s.events.exit,
+            stopLoss: !!s.events.stopLoss,
+            warning: !!s.events.warning,
+            dailyPnl: !!s.events.dailyPnl,
+          });
+        }
+      } catch (e: any) {
+        setErr('Konnte Einstellungen nicht laden.');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  async function save() {
+    try {
+      setSaving(true);
+      setErr(null);
+      const res = await fetch('/api/settings/telegram', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ global, categories: cats, events }),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      props.onClose();
+      alert('Einstellungen gespeichert.');
+    } catch (e: any) {
+      setErr('Speichern fehlgeschlagen.');
+    } finally {
+      setSaving(false);
+    }
   }
+
   return (
     <div className={styles.modalOverlay} onClick={props.onClose}>
       <div className={[styles.modal, styles.glassy].join(' ')} onClick={(e) => e.stopPropagation()}>
         <div className={styles.modalHeader}>
           <div className={styles.modalTitle}>Einstellungen • Telegram</div>
           <div className={styles.modalActions}>
-            <button className={classNames(styles.btn)} onClick={props.onClose}>
+            <button className={classNames(styles.btn)} onClick={props.onClose} disabled={saving}>
               Abbrechen
             </button>
-            <button className={classNames(styles.btn, styles.btnStart)} onClick={save}>
-              Speichern
+            <button className={classNames(styles.btn, styles.btnStart)} onClick={save} disabled={saving}>
+              {saving ? 'Speichern…' : 'Speichern'}
             </button>
           </div>
         </div>
         <div className={styles.modalBody}>
-          <div className={styles.settingsGrid}>
-            <div className={styles.settingsCard}>
-              <div className={styles.cardTitle}>Global</div>
-              <label className={styles.switch}>
-                <input
-                  type="checkbox"
-                  checked={global}
-                  onChange={(e) => setGlobal(e.target.checked)}
-                />
-                <span>Alle Benachrichtigungen</span>
-              </label>
-            </div>
-            <div className={styles.settingsCard}>
-              <div className={styles.cardTitle}>Rubriken</div>
-              {Object.entries(cats).map(([k, v]) => (
-                <label key={k} className={styles.switch}>
-                  <input
-                    type="checkbox"
-                    checked={v}
-                    onChange={(e) => setCats({ ...cats, [k]: e.target.checked })}
-                  />
-                  <span>{k}</span>
+          {loading ? (
+            <div className={styles.dim}>Lade Einstellungen…</div>
+          ) : (
+            <div className={styles.settingsGrid}>
+              <div className={styles.settingsCard}>
+                <div className={styles.cardTitle}>Global</div>
+                <label className={styles.switch}>
+                  <input type="checkbox" checked={global} onChange={(e) => setGlobal(e.target.checked)} />
+                  <span>Alle Benachrichtigungen</span>
                 </label>
-              ))}
+              </div>
+              <div className={styles.settingsCard}>
+                <div className={styles.cardTitle}>Rubriken</div>
+                {Object.entries(cats).map(([k, v]) => (
+                  <label key={k} className={styles.switch}>
+                    <input
+                      type="checkbox"
+                      checked={v}
+                      onChange={(e) => setCats({ ...cats, [k]: e.target.checked })}
+                    />
+                    <span>{k}</span>
+                  </label>
+                ))}
+              </div>
+              <div className={styles.settingsCard}>
+                <div className={styles.cardTitle}>Einzelevents</div>
+                {Object.entries(events).map(([k, v]) => (
+                  <label key={k} className={styles.switch}>
+                    <input
+                      type="checkbox"
+                      checked={v}
+                      onChange={(e) => setEvents({ ...events, [k]: e.target.checked })}
+                    />
+                    <span>{k}</span>
+                  </label>
+                ))}
+              </div>
             </div>
-            <div className={styles.settingsCard}>
-              <div className={styles.cardTitle}>Einzelevents</div>
-              {Object.entries(events).map(([k, v]) => (
-                <label key={k} className={styles.switch}>
-                  <input
-                    type="checkbox"
-                    checked={v}
-                    onChange={(e) => setEvents({ ...events, [k]: e.target.checked })}
-                  />
-                  <span>{k}</span>
-                </label>
-              ))}
-            </div>
-          </div>
+          )}
+          {err && <div className={styles.negative} style={{ marginTop: 12 }}>{err}</div>}
         </div>
       </div>
     </div>
