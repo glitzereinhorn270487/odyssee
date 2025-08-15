@@ -19,4 +19,3 @@ export async function POST(req: Request) {
   await onTick(t);
   return NextResponse.json({ ok: true });
 }
-@
