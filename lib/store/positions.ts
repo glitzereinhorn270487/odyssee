@@ -1,4 +1,4 @@
-import { kvGet, kvSet } from '../../lib/store/volatile';
+import { kvGet, kvSet } from '@/lib/store/volatile';
 
 export type Position = {
   id: string;
