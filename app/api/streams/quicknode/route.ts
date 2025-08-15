@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { gate } from '@/lib/bot/guard';
+import { verifyQuickNode } from '@/lib/webhooks/verify';
 import { seen } from '@/lib/bot/idemPotency';
 import { trackPool, recordRevocation, firstSeenAuthoritySnapshot } from '@/lib/bot/watch';
 import { recordTrade } from '@/lib/bot/rules';
@@ -7,7 +7,7 @@ import { onTick } from '@/lib/paper/engine';
 
 export const runtime = 'nodejs';
 
-// ---- Mapping helpers (ANPASSEN an dein QuickNode-Setup) ----
+// ---- Mapping (vereinfachte Defaults – später an dein Stream-Schema anpassen) ----
 function idOf(payload:any) {
   return payload?.signature || payload?.eventId || `${payload?.slot||0}:${payload?.index||0}:${payload?.mint||''}`;
 }
@@ -19,15 +19,12 @@ type ParsedEvt =
   | { type:'unknown'; data:any };
 
 function parseEvent(payload:any): ParsedEvt {
-  // Beispiele – bitte je nach Stream ändern:
-  if (payload?.event === 'pool_created' && payload?.mint) {
-    return { type:'pool_create', mint: payload.mint, data: payload };
-  }
+  if (payload?.event === 'pool_created' && payload?.mint) return { type:'pool_create', mint: payload.mint, data: payload };
   if (payload?.event === 'set_authority' && payload?.mint) {
     return { type:'set_authority', mint: payload.mint, newMintAuth: payload?.newMintAuthority ?? null, newFreezeAuth: payload?.newFreezeAuthority ?? null, data: payload };
   }
   if (payload?.event === 'swap' && payload?.mint) {
-    const side = (payload?.side === 'buy' ? 'buy' : (payload?.side === 'sell' ? 'sell' : 'buy'));
+    const side = payload?.side === 'sell' ? 'sell' : 'buy';
     const trader = payload?.owner || payload?.trader || null;
     const usd = Number(payload?.usd || payload?.amountUsd || 0);
     return { type:'trade', side, mint: payload.mint, trader, usd, data: payload };
@@ -38,17 +35,22 @@ function parseEvent(payload:any): ParsedEvt {
   return { type:'unknown', data: payload };
 }
 
-// ---- Handler ----
+// ---- Handlers ----
 export async function POST(req: Request) {
-  const g = await gate(req);
-  if (!g.allowed) return new NextResponse(null, { status: 204 });
+  // 1) HMAC prüfen (Streams Security Token)
+  const v = await verifyQuickNode(req);
+  if (!v.ok) return new NextResponse(null, { status: 401 });
 
+  // 2) Payload parsen (wir nutzen den verifizierten Klartext)
   let payload:any = {};
-  try { payload = await req.json(); } catch {}
+  try { payload = v.payloadText ? JSON.parse(v.payloadText) : {}; } catch {}
+
+  // 3) Idempotenz
   const evt = parseEvent(payload);
   const eid = idOf(payload);
-  if (eid && await seen(eid)) return new NextResponse(null, { status: 204 }); // idempotent
+  if (eid && await seen(eid)) return new NextResponse(null, { status: 204 });
 
+  // 4) Routing
   if (evt.type === 'pool_create') {
     await trackPool(evt.mint);
     await firstSeenAuthoritySnapshot(evt.mint);
@@ -69,9 +71,11 @@ export async function POST(req: Request) {
       txSells1m: evt.sells1m || 0,
     } as any);
   }
+
   return NextResponse.json({ ok: true });
 }
 
 export async function GET() {
-  return NextResponse.json({ ok: true, stream: 'quicknode', rules: 'trade-tracking+revocation+ticks' });
+  const hasSecret = !!(process.env.QN_STREAMS_TOKEN || process.env.QUICKNODE_STREAMS_TOKEN);
+  return NextResponse.json({ ok: true, verify: 'hmac', hasSecret });
 }
