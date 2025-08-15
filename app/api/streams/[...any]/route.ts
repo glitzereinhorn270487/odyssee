@@ -6,27 +6,27 @@ export const dynamic = 'force-dynamic';
 
 type Ctx = { params: { any?: string[] } };
 
+// Welcher Token wird für welches Endpoint-Segment erwartet?
 function expectedFor(endpoint: string) {
   const e = endpoint.toLowerCase();
-  // Pump.fun nutzt (wenn gesetzt) QN_PUMPFUN_TOKEN, sonst fallback auf QN_STREAMS_TOKEN
   if (e === 'pumpfun') {
     return process.env.QN_PUMPFUN_TOKEN || process.env.QN_STREAMS_TOKEN || '';
   }
-  // Alles andere (z.B. quicknode/raydium) primär QN_STREAMS_TOKEN
+  // default (z.B. quicknode/raydium)
   return process.env.QN_STREAMS_TOKEN || process.env.QN_PUMPFUN_TOKEN || '';
 }
 
+// Kandidaten aus allen üblichen Header-/Query-Quellen einsammeln
 function extractCandidates(req: Request): string[] {
   const url = new URL(req.url);
   const h = req.headers;
 
-  // Authorization: Bearer <token>
   const auth = h.get('authorization') || '';
   let bearer = '';
   const m = auth.match(/^\s*Bearer\s+(.+)$/i);
   if (m) bearer = m[1].trim();
 
-  const list = [
+  return [
     bearer,
     h.get('x-qn-token') || '',
     h.get('x-quicknode-token') || '',
@@ -35,8 +35,6 @@ function extractCandidates(req: Request): string[] {
     h.get('x-verify-token') || '',
     url.searchParams.get('token') || '',
   ].filter(Boolean);
-
-  return list;
 }
 
 function tokenOk(req: Request, endpoint: string) {
@@ -56,7 +54,7 @@ export async function GET(req: Request, ctx: Ctx) {
   const segs = ctx.params.any ?? [];
   const endpoint = (segs[0] || '(root)').toLowerCase();
 
-  // Inspect-Modus nur mit DEBUG_TOKEN
+  // Inspect-Modus (nur mit DEBUG_TOKEN)
   const dt = process.env.DEBUG_TOKEN || '';
   const url = new URL(req.url);
   const wantInspect = url.searchParams.get('inspect') === '1';
@@ -64,7 +62,6 @@ export async function GET(req: Request, ctx: Ctx) {
 
   if (wantInspect && dt && gotDT === dt) {
     const headers: Record<string, string> = {};
-    // nur "kandidaten-relevante" header zurückgeben, Maskierung aktiv
     const names = ['authorization','x-qn-token','x-quicknode-token','x-security-token','x-webhook-token','x-verify-token'];
     for (const n of names) {
       const v = req.headers.get(n);
@@ -77,7 +74,7 @@ export async function GET(req: Request, ctx: Ctx) {
       expectedSet: !!want,
       expectedPreview: mask(want),
       seenHeaders: headers,
-      note: 'Inspect mode (headers masked). Disable by removing ?inspect=1.'
+      note: 'Inspect mode (headers masked). Remove ?inspect=1 to disable.'
     });
   }
 
@@ -89,7 +86,7 @@ export async function POST(req: Request, ctx: Ctx) {
   const endpoint = (segs[0] || '(root)').toLowerCase();
   const ok = tokenOk(req, endpoint);
 
-  // Optional: Engine anstoßen (best effort), ohne Token-Fehler zu verschleiern
+  // Payload best effort parsen & Engine andeuten (nicht kritisch)
   let raw = '';
   try { raw = await req.text(); } catch {}
   let payload: any = {};
@@ -104,7 +101,6 @@ export async function POST(req: Request, ctx: Ctx) {
       await tickFn({
         mint: payload?.mint || payload?.tokenMint || payload?.symbol || 'UNKNOWN',
         symbol: payload?.symbol || payload?.mint || 'UNK',
-        // price optional; Engine darf ignorieren
         priceUsd: Number(payload?.priceUsd ?? payload?.usd ?? payload?.amountUsd) || undefined,
         volumeUsd1m: Number(payload?.vol1m || payload?.volumeUsd1m || 0) || 0,
         volumeUsd5m: Number(payload?.vol5m || payload?.volumeUsd5m || 0) || 0,
