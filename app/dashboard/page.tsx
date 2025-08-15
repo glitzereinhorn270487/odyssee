@@ -1,6 +1,8 @@
 'use client';
 import React, { useMemo, useState, useEffect } from 'react';
 import styles from './styles.module.css';
+import AgentStatusBadge from '@/components/AgentStatusBadge';
+
 
 type Position = {
   id: string; chain: string; name: string; category: string; narrative?: string | null;
