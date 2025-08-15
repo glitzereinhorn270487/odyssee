@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { kvSet } from '../../../../lib/store/volatile';
-import { toggleQuickNodeStreams } from '../../../../lib/quicknode/client';
+import { kvSet } from '@/lib/store/volatile';
+import { toggleQuickNodeStreams } from '@/lib/quicknode/client';
 
 export const runtime = 'nodejs';
 const KEY = 'bot:status';
