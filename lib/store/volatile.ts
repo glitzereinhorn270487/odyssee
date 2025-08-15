@@ -1,13 +1,13 @@
-// Einfache, flüchtige Key-Value-Map (pro Lambda-Instanz)
-type Store = Map<string, any>;
-const KEY = '__volatile_store__';
+// Simple in-memory store (V1.0). V1.1 -> Upstash/Vercel KV.
 const g = globalThis as any;
-if (!g[KEY]) g[KEY] = new Map<string, any>() as Store;
-const store: Store = g[KEY];
+g.__VOLATILE_STORE__ ||= new Map<string, any>();
 
-export async function kvGet<T>(k: string): Promise<T | null> {
-  return store.has(k) ? (store.get(k) as T) : null;
+export async function kvGet<T = any>(key: string): Promise<T | undefined> {
+  return g.__VOLATILE_STORE__.get(key);
 }
-export async function kvSet<T>(k: string, v: T): Promise<void> {
-  store.set(k, v);
+export async function kvSet(key: string, value: any): Promise<void> {
+  g.__VOLATILE_STORE__.set(key, value);
+}
+export async function kvDel(key: string): Promise<void> {
+  g.__VOLATILE_STORE__.delete(key);
 }
