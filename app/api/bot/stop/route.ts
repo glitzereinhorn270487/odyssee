@@ -1,21 +1,28 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { kvSet } from '@/lib/store/volatile';
-import { toggleQuickNodeStreams } from '@/lib/quicknode/client';
-import { notifyStartStop } from '@/lib/telegram/notifier';
 
 export const runtime = 'nodejs';
 
 export async function POST() {
-  await kvSet('bot:status', { status: 'OFF', level: 'low' });
-
-  const res = NextResponse.json({ ok: true, status: 'OFF' });
+  const res = NextResponse.json({ ok: true, status: 'OFF', level: 'low' });
   const c = cookies();
   c.set('bot_status', 'OFF', { httpOnly: false, sameSite: 'lax', path: '/' });
   c.set('bot_level',  'low',  { httpOnly: false, sameSite: 'lax', path: '/' });
 
-  await toggleQuickNodeStreams(false).catch(()=>{});
-  await notifyStartStop('stop', { status: 'OFF', level: 'low' }).catch(()=>{});
+  try {
+    const kv = await import('@/lib/store/volatile');
+    if ((kv as any)?.kvSet) await (kv as any).kvSet('bot:status', { status: 'OFF', level: 'low' });
+  } catch {}
+
+  try {
+    const mod = await import('@/lib/quicknode/client');
+    if ((mod as any)?.toggleQuickNodeStreams) await (mod as any).toggleQuickNodeStreams(false);
+  } catch {}
+
+  try {
+    const tg = await import('@/lib/telegram/notifier');
+    if ((tg as any)?.notifyStartStop) await (tg as any).notifyStartStop('stop', { status: 'OFF', level: 'low' });
+  } catch {}
 
   return res;
 }
