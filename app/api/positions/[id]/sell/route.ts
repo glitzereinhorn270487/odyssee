@@ -1,15 +1,9 @@
 import { NextResponse } from 'next/server';
+import { closePosition } from '../../../../lib/store/positions';
 
 export const runtime = 'nodejs';
 
-export async function POST(
-  req: Request,
-  { params }: { params: { id: string } }
-) {
-  // TODO V1.1: echten Sell triggern (Jupiter/Helius/QuickNode etc.)
-  return NextResponse.json({
-    ok: true,
-    id: params.id,
-    message: `Position ${params.id} verkauft (stub)`
-  });
+export async function POST(_req: Request, { params }: { params: { id: string } }) {
+  const ok = await closePosition(params.id);
+  return NextResponse.json({ ok, id: params.id, message: ok ? `Position ${params.id} geschlossen` : 'not found' });
 }
