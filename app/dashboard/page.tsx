@@ -238,7 +238,7 @@ export default function DashboardPage() {
             <div className={styles.valueBig}>{fmtUSD(freeUSD)}</div>
           </Card>
 
-          <TrafficLightCard
+        <TrafficLightCard
             className={styles.mt12}
             winrate={traffic.winrate}
             factor={traffic.factor}
@@ -328,7 +328,7 @@ function TopBar(props: {
         >
           Agent stoppen
         </button>
-        <div className={styles.level}>
+               <div className={styles.level}>
           <span className={styles.badge}>Investmentstufe</span>
           <select
             className={styles.select}
