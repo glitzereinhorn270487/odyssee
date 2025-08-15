@@ -1,4 +1,4 @@
-// T0_STREAMS_CATCHALL_V3.ts
+// T0_STREAMS_CATCHALL_V4.ts
 import { NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
@@ -9,11 +9,22 @@ type Ctx = { params: { any?: string[] } };
 // Welcher Token wird für welches Endpoint-Segment erwartet?
 function expectedFor(endpoint: string) {
   const e = endpoint.toLowerCase();
-  if (e === 'pumpfun') {
-    return process.env.QN_PUMPFUN_TOKEN || process.env.QN_STREAMS_TOKEN || '';
-  }
-  // default (z.B. quicknode/raydium)
+  if (e === 'pumpfun') return process.env.QN_PUMPFUN_TOKEN || process.env.QN_STREAMS_TOKEN || '';
+  if (e === 'quicknode') return process.env.QN_STREAMS_TOKEN || process.env.QN_PUMPFUN_TOKEN || '';
   return process.env.QN_STREAMS_TOKEN || process.env.QN_PUMPFUN_TOKEN || '';
+}
+
+function mask(s: string | null) {
+  if (!s) return '';
+  const str = String(s);
+  if (str.length <= 8) return '*'.repeat(str.length);
+  return str.slice(0,4) + '…' + str.slice(-4);
+}
+
+function maskBearer(v: string | null) {
+  if (!v) return '';
+  const m = v.match(/^\s*(Bearer)\s+(.+)$/i);
+  return m ? `${m[1]} ${mask(m[2])}` : mask(v);
 }
 
 // Kandidaten aus allen üblichen Header-/Query-Quellen einsammeln
@@ -26,15 +37,21 @@ function extractCandidates(req: Request): string[] {
   const m = auth.match(/^\s*Bearer\s+(.+)$/i);
   if (m) bearer = m[1].trim();
 
-  return [
+  const candidates = [
     bearer,
     h.get('x-qn-token') || '',
     h.get('x-quicknode-token') || '',
     h.get('x-security-token') || '',
     h.get('x-webhook-token') || '',
     h.get('x-verify-token') || '',
-    url.searchParams.get('token') || '',
+    h.get('x-token') || '',
+    h.get('x-auth-token') || '',
+    h.get('x-api-key') || '',
+    h.get('quicknode-token') || '',
+    new URL(req.url).searchParams.get('token') || '',
   ].filter(Boolean);
+
+  return candidates;
 }
 
 function tokenOk(req: Request, endpoint: string) {
@@ -42,12 +59,6 @@ function tokenOk(req: Request, endpoint: string) {
   if (!want) return true; // kein Secret hinterlegt -> alles durchlassen (Dev)
   const cands = extractCandidates(req);
   return cands.includes(want);
-}
-
-function mask(s: string) {
-  if (!s) return s;
-  if (s.length <= 8) return '*'.repeat(s.length);
-  return s.slice(0, 4) + '…' + s.slice(-4);
 }
 
 export async function GET(req: Request, ctx: Ctx) {
@@ -61,11 +72,11 @@ export async function GET(req: Request, ctx: Ctx) {
   const gotDT = url.searchParams.get('token') || req.headers.get('x-debug-token') || '';
 
   if (wantInspect && dt && gotDT === dt) {
-    const headers: Record<string, string> = {};
-    const names = ['authorization','x-qn-token','x-quicknode-token','x-security-token','x-webhook-token','x-verify-token'];
+    const names = ['authorization','x-qn-token','x-quicknode-token','x-security-token','x-webhook-token','x-verify-token','x-token','x-auth-token','x-api-key','quicknode-token'];
+    const seen: Record<string,string> = {};
     for (const n of names) {
       const v = req.headers.get(n);
-      if (v) headers[n] = n === 'authorization' ? v.replace(/(Bearer)\s+(.+)/i, (_,a,b)=>`${a} ${mask(b)}`) : mask(v);
+      if (v) seen[n] = n === 'authorization' ? maskBearer(v) : mask(v);
     }
     const want = expectedFor(endpoint);
     return NextResponse.json({
@@ -73,8 +84,8 @@ export async function GET(req: Request, ctx: Ctx) {
       endpoint,
       expectedSet: !!want,
       expectedPreview: mask(want),
-      seenHeaders: headers,
-      note: 'Inspect mode (headers masked). Remove ?inspect=1 to disable.'
+      seenHeaders: seen,
+      note: 'Inspect mode (GET). Für echte QuickNode-POST-Header siehe Vercel-Logs.'
     });
   }
 
@@ -84,9 +95,19 @@ export async function GET(req: Request, ctx: Ctx) {
 export async function POST(req: Request, ctx: Ctx) {
   const segs = ctx.params.any ?? [];
   const endpoint = (segs[0] || '(root)').toLowerCase();
+
+  // --- Debug: Header-Previews in Logs (maskiert) ---
+  try {
+    const names = ['authorization','x-qn-token','x-quicknode-token','x-security-token','x-webhook-token','x-verify-token','x-token','x-auth-token','x-api-key','quicknode-token'];
+    const preview: Record<string,string> = {};
+    for (const n of names) preview[n] = n==='authorization' ? maskBearer(req.headers.get(n)) : mask(req.headers.get(n));
+    // eslint-disable-next-line no-console
+    console.log('[streams] headers', endpoint, preview);
+  } catch {}
+
   const ok = tokenOk(req, endpoint);
 
-  // Payload best effort parsen & Engine andeuten (nicht kritisch)
+  // Payload best effort parsen & Engine zart antickern (nicht kritisch)
   let raw = '';
   try { raw = await req.text(); } catch {}
   let payload: any = {};
@@ -108,7 +129,7 @@ export async function POST(req: Request, ctx: Ctx) {
         txSells1m: Number(payload?.sells1m || 0) || 0,
       });
     }
-  } catch { /* Engine fehlt/anders -> egal */ }
+  } catch {}
 
   if (!ok) {
     return new NextResponse(JSON.stringify({ ok:false, reason:'BAD_TOKEN' }), {
