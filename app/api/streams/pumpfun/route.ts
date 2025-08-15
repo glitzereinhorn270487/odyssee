@@ -13,7 +13,11 @@ function idOf(p:any){
 
 export async function POST(req: Request) {
   const v = await verifyQuickNode(req);
-  if (!v.ok) return new NextResponse(null, { status: 401 });
+  if (!v.ok) return new NextResponse(JSON.stringify({ ok:false, reason: v.reason||'verify_failed' }), {
+  status: 401,
+  headers: { 'content-type':'application/json' }
+});
+
 
   let payload:any = {};
   try { payload = v.payloadText ? JSON.parse(v.payloadText) : {}; } catch {}
