@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { closePosition } from '../../../../lib/store/positions';
+import { closePosition } from '@/lib/store/positions';
 
 export const runtime = 'nodejs';
 
