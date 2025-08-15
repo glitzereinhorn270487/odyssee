@@ -252,49 +252,108 @@ function PositionsTable(props: {
 }
 
 function DetailDrawer(props: {
-  position: Position; timeWindow: '30m'|'1h'|'6h'|'12h'|'24h';
-  onTimeWindow: (w:any)=>void; onClose: ()=>void; onSell: ()=>void;
+  position: Position;
+  timeWindow: '30m' | '1h' | '6h' | '12h' | '24h';
+  onTimeWindow: (w: any) => void;
+  onClose: () => void;
+  onSell: () => void;
 }) {
   const { position: p, timeWindow, onTimeWindow, onClose, onSell } = props;
   return (
-   <div>
-  <span className={styles.dim}>G/V ($)</span>
-  <div className={p.pnlUSD >= 0 ? styles.positive : styles.negative}>
-    {fmtUSD(p.pnlUSD)}
-    </div>
-    </div>
- <div className={styles.modal} onClick={e => e.stopPropagation()}>
+    <div className={styles.modalOverlay} onClick={onClose}>
+      <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div className={styles.modalHeader}>
-          <div className={styles.modalTitle}>{p.name} <span className={styles.badge}>{p.chain}</span></div>
+          <div className={styles.modalTitle}>
+            {p.name} <span className={styles.badge}>{p.chain}</span>
+          </div>
           <div className={styles.modalActions}>
-            <select className={styles.select} value={timeWindow} onChange={e => onTimeWindow(e.target.value)}>
-              <option value="30m">letzte 30 Min</option><option value="1h">letzte Stunde</option>
-              <option value="6h">vor 6 Stunden</option><option value="12h">vor 12 Stunden</option>
+            <select
+              className={styles.select}
+              value={timeWindow}
+              onChange={(e) => onTimeWindow(e.target.value)}
+            >
+              <option value="30m">letzte 30 Min</option>
+              <option value="1h">letzte Stunde</option>
+              <option value="6h">vor 6 Stunden</option>
+              <option value="12h">vor 12 Stunden</option>
               <option value="24h">vor 24 Stunden</option>
             </select>
-            <button className={classNames(styles.btn, styles.btnSell)} onClick={onSell}>Sell Position</button>
-            <button className={classNames(styles.btn)} onClick={onClose}>Schließen</button>
+            <button className={classNames(styles.btn, styles.btnSell)} onClick={onSell}>
+              Sell Position
+            </button>
+            <button className={classNames(styles.btn)} onClick={onClose}>
+              Schließen
+            </button>
           </div>
         </div>
+
         <div className={styles.modalBody}>
           <div className={styles.detailGrid}>
-            <div><span className={styles.dim}>Kategorie</span><div>{p.category}</div></div>
-            <div><span className={styles.dim}>Narrative</span><div>{p.narrative ?? '—'}</div></div>
-            <div><span className={styles.dim}>Marketcap</span><div>{fmtNum(p.mcap)}</div></div>
-            <div><span className={styles.dim}>Volumen</span><div>{fmtNum(p.volume)}</div></div>
-            <div><span className={styles.dim}>Investmenthöhe</span><div>{fmtUSD(p.investment)}</div></div>
-            <div><span className={p.pnlUSD >= 0 ? styles.positive : styles.negative}>{fmtUSD(p.pnlUSD)}</div></div>
-            <div><span className={styles.dim}>TAX</span><div>{fmtUSD(p.taxUSD)}</div></div>
-            <div><span className={styles.dim}>Holderanzahl</span><div>{fmtNum(p.holders ?? 0)}</div></div>
-            <div><span className={styles.dim}>Transaktionen</span><div>Buy {p.txCount?.buy ?? 0} • Sell {p.txCount?.sell ?? 0}</div></div>
-            <div><span className={styles.dim}>ScoreX</span><div>{p.scores?.scorex ?? '—'}</div></div>
-            <div><span className={styles.dim}>RiskScore</span><div>{p.scores?.risk ?? '—'}</div></div>
-            <div><span className={styles.dim}>FomoScore</span><div>{p.scores?.fomo ?? '—'}</div></div>
-            <div><span className={styles.dim}>P&D Wahrscheinlichkeit</span><div>{(p.scores?.pumpDumpProb ?? 0).toFixed(2)}</div></div>
-            <div><span className={styles.dim}>Links</span>
+            <div>
+              <span className={styles.dim}>Kategorie</span>
+              <div>{p.category}</div>
+            </div>
+            <div>
+              <span className={styles.dim}>Narrative</span>
+              <div>{p.narrative ?? '—'}</div>
+            </div>
+            <div>
+              <span className={styles.dim}>Marketcap</span>
+              <div>{fmtNum(p.mcap)}</div>
+            </div>
+            <div>
+              <span className={styles.dim}>Volumen</span>
+              <div>{fmtNum(p.volume)}</div>
+            </div>
+            <div>
+              <span className={styles.dim}>Investmenthöhe</span>
+              <div>{fmtUSD(p.investment)}</div>
+            </div>
+            <div>
+              <span className={styles.dim}>G/V ($)</span>
+              <div className={p.pnlUSD >= 0 ? styles.positive : styles.negative}>
+                {fmtUSD(p.pnlUSD)}
+              </div>
+            </div>
+            <div>
+              <span className={styles.dim}>TAX</span>
+              <div>{fmtUSD(p.taxUSD)}</div>
+            </div>
+            <div>
+              <span className={styles.dim}>Holderanzahl</span>
+              <div>{fmtNum(p.holders ?? 0)}</div>
+            </div>
+            <div>
+              <span className={styles.dim}>Transaktionen</span>
+              <div>
+                Buy {p.txCount?.buy ?? 0} • Sell {p.txCount?.sell ?? 0}
+              </div>
+            </div>
+            <div>
+              <span className={styles.dim}>ScoreX</span>
+              <div>{p.scores?.scorex ?? '—'}</div>
+            </div>
+            <div>
+              <span className={styles.dim}>RiskScore</span>
+              <div>{p.scores?.risk ?? '—'}</div>
+            </div>
+            <div>
+              <span className={styles.dim}>FomoScore</span>
+              <div>{p.scores?.fomo ?? '—'}</div>
+            </div>
+            <div>
+              <span className={styles.dim}>P&D Wahrscheinlichkeit</span>
+              <div>{(p.scores?.pumpDumpProb ?? 0).toFixed(2)}</div>
+            </div>
+            <div>
+              <span className={styles.dim}>Links</span>
               <div className={styles.linkList}>
-                {p.links?.telegram && <a href={p.links.telegram} target="_blank">Telegram</a>}
-                {p.links?.dexscreener && <a href={p.links.dexscreener} target="_blank">DexScreener</a>}
+                {p.links?.telegram && (
+                  <a href={p.links.telegram} target="_blank">Telegram</a>
+                )}
+                {p.links?.dexscreener && (
+                  <a href={p.links.dexscreener} target="_blank">DexScreener</a>
+                )}
               </div>
             </div>
           </div>
@@ -303,6 +362,7 @@ function DetailDrawer(props: {
     </div>
   );
 }
+
 
 function SettingsModal(props: { onClose: () => void }) {
   const [global, setGlobal] = useState(true);
