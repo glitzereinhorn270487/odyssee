@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getOpenPositions, closePosition } from '../../../lib/store/positions';
-import { kvGet, kvSet } from '../../../lib/store/volatile';
+import { getOpenPositions, closePosition } from '@/lib/store/positions';
+import { kvGet, kvSet } from '@/lib/store/volatile';
 
 export const runtime = 'nodejs';
 const KEY_LAST = 'manager:lastRun';
