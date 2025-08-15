@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { kvGet } from '../../../../lib/store/volatile';
+import { kvGet } from '@/lib/store/volatile';
 
 export const runtime = 'nodejs';
 const KEY = 'bot:status';
