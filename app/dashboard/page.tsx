@@ -2,6 +2,8 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import styles from './styles.module.css';
 import AgentStatusBadge from '@/components/AgentStatusBadge';
+import AgentControls from '@/components/AgentControls';
+
 
 
 type Position = {
