@@ -1,1 +1,10 @@
-import { NextResponse } from 'next/server'; export const runtime = 'nodejs'; export async function GET() { return NextResponse.json({ ok:true, where:'/api/streams/health' }); } export async function POST(req: Request) { return NextResponse.json({ ok:true, where:'/api/streams/health', got: await req.text() }); }
+import { NextResponse } from 'next/server';
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+export async function GET() {
+  return NextResponse.json({ ok: true, where: '/api/streams/health' });
+}
+export async function POST(req: Request) {
+  return NextResponse.json({ ok: true, where: '/api/streams/health', got: await req.text() });
+}
