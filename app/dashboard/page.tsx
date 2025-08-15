@@ -257,8 +257,13 @@ function DetailDrawer(props: {
 }) {
   const { position: p, timeWindow, onTimeWindow, onClose, onSell } = props;
   return (
-    <div className={styles.modalOverlay} onClick={onClose}>
-      <div className={styles.modal} onClick={e => e.stopPropagation()}>
+   <div>
+  <span className={styles.dim}>G/V ($)</span>
+  <div className={p.pnlUSD >= 0 ? styles.positive : styles.negative}>
+    {fmtUSD(p.pnlUSD)}
+    </div>
+    </div>
+ <div className={styles.modal} onClick={e => e.stopPropagation()}>
         <div className={styles.modalHeader}>
           <div className={styles.modalTitle}>{p.name} <span className={styles.badge}>{p.chain}</span></div>
           <div className={styles.modalActions}>
