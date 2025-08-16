@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import * as KV from '@/lib/store/volatile';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const c = cookies();
-  const status = c.get('bot_status')?.value || 'OFF';
-  const level  = c.get('bot_level')?.value || 'low';
-  return NextResponse.json({ status, level });
+  const active = KV.getBoolean('bot.active', false);
+  const status = active ? 'active' : 'inactive';
+  return NextResponse.json({ ok: true, status, active });
 }
