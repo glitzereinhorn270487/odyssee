@@ -1,4 +1,3 @@
-// T0_POSITIONS_MANAGER_ROUTE.ts
 import { NextResponse } from 'next/server';
 import { onManager } from '@/lib/paper/engine';
 
@@ -10,6 +9,4 @@ export async function GET() {
   catch(e:any){ return NextResponse.json({ ok:false, error:String(e) }, { status:500 }); }
 }
 
-export async function POST() {
-  return GET();
-}
+export async function POST() { return GET(); }
