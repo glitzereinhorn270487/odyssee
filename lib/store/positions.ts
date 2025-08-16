@@ -1,5 +1,13 @@
 // In-Memory Positions-Store, kompatibel zu Engine + Analytics + Detail-API
 
+export type Links = {
+  telegram?: string;
+  dexScreener?: string;
+  website?: string;
+  twitter?: string;
+  docs?: string;
+};
+
 export type Position = {
   id: string;
   chain: 'SOL';
@@ -32,6 +40,7 @@ export type Position = {
     fomo: number;
     pumpDumpProb: number;
   };
+  links?: Links;
 
   // Sonstiges
   meta?: Record<string, any>;
@@ -107,4 +116,3 @@ export async function setClosedPositions(list: Position[]): Promise<boolean> {
   }
   return true;
 }
-
