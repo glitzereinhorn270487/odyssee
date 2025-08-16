@@ -1,4 +1,6 @@
-// Engine mit robustem Store-Adapter + feste Literal-Typen für TS
+// T0_ENGINE_CFG_V3.ts
+import * as Vol from '@/lib/store/volatile';
+
 type Tick = {
   mint: string; symbol?: string; priceUsd?: number;
   volumeUsd1m?: number; volumeUsd5m?: number;
@@ -24,8 +26,6 @@ let inMemory: Map<string, Position> | null = null;
 
 async function ensureStore() {
   if (storeApi) return storeApi;
-
-  // 1) echten Store dynamisch laden und auf bekannte Funktionsnamen mappen
   try {
     const mod: any = await import('@/lib/store/positions');
     const listFn  = mod.listPositions || mod.list || mod.getAll || mod.all;
@@ -33,7 +33,6 @@ async function ensureStore() {
     const openFn  = mod.openPosition  || mod.open || mod.create || mod.add;
     const updFn   = mod.updatePosition|| mod.update|| mod.patch  || mod.set;
     const closeFn = mod.closePosition || mod.close|| mod.remove  || mod.exit || mod.sellPosition;
-
     if (listFn && openFn && closeFn) {
       storeApi = {
         async listPositions() { return await listFn(); },
@@ -45,36 +44,52 @@ async function ensureStore() {
       return storeApi;
     }
   } catch {}
-
-  // 2) Fallback: In-Memory-Store
   if (!inMemory) inMemory = new Map<string, Position>();
   storeApi = {
     async listPositions() { return Array.from(inMemory!.values()); },
     async getPosition(id: string) { return inMemory!.get(id) ?? null; },
-    async openPosition(p: Position) {
-      inMemory!.set(p.id, p);
-      return p;
-    },
+    async openPosition(p: Position) { inMemory!.set(p.id, p); return p; },
     async updatePosition(id: string, patch: Partial<Position>) {
       const cur = inMemory!.get(id); if (!cur) return null;
-      const upd: Position = { ...cur, ...patch };
-      inMemory!.set(id, upd);
-      return upd;
+      const upd: Position = { ...cur, ...patch }; inMemory!.set(id, upd); return upd;
     },
     async closePosition(id: string, reason?: string) {
       const cur = inMemory!.get(id); if (!cur) return null;
       const upd: Position = { ...cur, status: 'closed' as const, reason: reason ?? 'closed' };
-      inMemory!.set(id, upd);
-      return upd;
+      inMemory!.set(id, upd); return upd;
     },
   };
   return storeApi;
 }
 
-// --- Paper V1 Schwellen ---
-const CFG = { minVol1mUsd: 50, minBuys1m: 1, investUsd: 5, stagnationMinutes: 5, maxFirstBuyerSlots: 3 };
+// Defaults + effektive Konfig laden (Modal -> Volatile -> ENV -> Defaults)
+const DEFAULTS = {
+  minVol1mUsd: 50,
+  minBuys1m: 1,
+  investUsd: 5,
+  stagnationMinutes: 5,
+  maxFirstBuyerSlots: 3,
+};
+function envNum(name:string, def:number) {
+  const v = process.env[name]; const n = Number(v); return Number.isFinite(n)?n:def;
+}
+function envBool(name:string, def:boolean) {
+  const v = process.env[name]; if (v==null) return def;
+  const s = String(v).toLowerCase(); return s==='1'||s==='true'||s==='yes'||s==='on';
+}
+export function getEffectiveConfig() {
+  return {
+    minVol1mUsd: Vol.getNumber('rules.minVol1mUsd', envNum('RULE_MIN_VOL_1M', DEFAULTS.minVol1mUsd)),
+    minBuys1m: Vol.getNumber('rules.minBuys1m', envNum('RULE_MIN_BUYS_1M', DEFAULTS.minBuys1m)),
+    investUsd: Vol.getNumber('rules.investUsd', envNum('PAPER_INVEST_USD', DEFAULTS.investUsd)),
+    stagnationMinutes: Vol.getNumber('rules.stagnationMinutes', envNum('PAPER_STAG_MIN', DEFAULTS.stagnationMinutes)),
+    maxFirstBuyerSlots: Vol.getNumber('rules.maxFirstBuyerSlots', envNum('PAPER_MAX_FIRSTBUYER_SLOTS', DEFAULTS.maxFirstBuyerSlots)),
+  };
+}
+function isBotActive() {
+  return Vol.getBoolean('bot.active', envBool('BOT_ACTIVE', true));
+}
 
-const now = () => Date.now();
 const niceName = (t:Tick) => (t.symbol?.trim() ? t.symbol!.toUpperCase() : (t.mint ? t.mint.slice(0,4)+'…'+t.mint.slice(-4) : 'UNK'));
 const categoryFor = (t:Tick): Position['category'] => {
   const s = (t.source || '').toLowerCase();
@@ -82,54 +97,42 @@ const categoryFor = (t:Tick): Position['category'] => {
   if (s.includes('quick')) return 'Raydium';
   return 'Test';
 };
+const now = () => Date.now();
 
-async function shouldOpen(t:Tick) {
+async function shouldOpen(t: Tick, CFG: ReturnType<typeof getEffectiveConfig>) {
   const vol = Number(t.volumeUsd1m || 0);
   const buys = Number(t.txBuys1m || 0);
   if (vol < CFG.minVol1mUsd) return { ok:false, reason:'vol_too_low' };
 
   if (buys < CFG.minBuys1m) {
     const api = await ensureStore();
-    const open = (await api.listPositions()).filter((p)=>p.status==='open');
-    const firstBuyerOpen = open.filter((p)=>p.meta?.noFollowers===true).length;
+    const open = (await api.listPositions()).filter(p=>p.status==='open');
+    const firstBuyerOpen = open.filter(p=>p.meta?.noFollowers===true).length;
     if (firstBuyerOpen >= CFG.maxFirstBuyerSlots) return { ok:false, reason:'no_follower_slots_full' };
     return { ok:true, noFollowers:true as const };
   }
   return { ok:true };
 }
 
-async function paperOpen(t:Tick) {
+async function paperOpen(t: Tick, CFG: ReturnType<typeof getEffectiveConfig>) {
   const api = await ensureStore();
-  const id = (t.mint || t.symbol || '').trim();
-  if (!id) return;
-
-  const exists = await api.getPosition(id);
-  if (exists?.status === 'open') return;
+  const id = (t.mint || t.symbol || '').trim(); if (!id) return;
+  const exists = await api.getPosition(id); if (exists?.status==='open') return;
 
   const pos: Position = {
-    id,
-    chain: 'SOL',
-    name: niceName(t),
-    category: categoryFor(t),
-    marketcap: undefined,
-    volume: t.volumeUsd1m || 0,
-    investmentUsd: CFG.investUsd,
-    pnlUsd: 0,
-    openedAt: now(),
+    id, chain:'SOL', name:niceName(t), category:categoryFor(t),
+    marketcap: undefined, volume: t.volumeUsd1m || 0,
+    investmentUsd: CFG.investUsd, pnlUsd: 0, openedAt: now(),
     status: 'open' as const,
-    meta: {
-      priceUsdAtOpen: t.priceUsd,
-      noFollowers: Number(t.txBuys1m || 0) < CFG.minBuys1m,
-      src: t.source || 'unknown',
-    },
+    meta: { priceUsdAtOpen: t.priceUsd, noFollowers: Number(t.txBuys1m||0) < CFG.minBuys1m, src: t.source || 'unknown' },
   };
   await api.openPosition(pos);
 }
 
-async function paperStagnationSweep() {
+async function paperStagnationSweep(CFG: ReturnType<typeof getEffectiveConfig>) {
   const api = await ensureStore();
   const all = await api.listPositions();
-  const open = all.filter((p)=>p.status==='open');
+  const open = all.filter(p=>p.status==='open');
   const cutoff = now() - CFG.stagnationMinutes * 60 * 1000;
   for (const p of open) {
     if (p.openedAt < cutoff && p.meta?.noFollowers) {
@@ -138,11 +141,28 @@ async function paperStagnationSweep() {
   }
 }
 
+// Public API
 export async function onWebhook(_evt:{source?:string; path?:string; payload?:any}) { return { ok:true }; }
-export async function onTick(t:Tick) {
-  const d = await shouldOpen(t);
-  if (d.ok) await paperOpen(t);
-  await paperStagnationSweep();
+
+export async function onTick(t: Tick) {
+  const CFG = getEffectiveConfig();
+
+  // Bot off => nur Manager-Teil erlauben (kein Open)
+  if (!isBotActive()) {
+    await paperStagnationSweep(CFG);
+    return { ok:true, skipped:'bot_inactive' };
+  }
+
+  const d = await shouldOpen(t, CFG);
+  if (d.ok) await paperOpen(t, CFG);
+  await paperStagnationSweep(CFG);
   return { ok:true, decision:d };
 }
+
+export async function onManager() {
+  const CFG = getEffectiveConfig();
+  await paperStagnationSweep(CFG);
+  return { ok:true };
+}
+
 export default onTick;
