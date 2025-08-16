@@ -1,32 +1,39 @@
-// T0_STREAMS_CATCHALL_V6_FIX.ts
+// T0_STREAMS_CATCHALL_V8.ts
 import { NextResponse } from 'next/server';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 type Ctx = { params?: { any?: string[] } };
 
-const norm = (s: any) => String(s ?? '').trim().replace(/^['"]|['"]$/g, '');
+// ---------- helpers ----------
+const norm = (s: any) => String(s ?? '');
+const stripQuotes = (s: string) => s.replace(/^['"]|['"]$/g, '');
+const stripCtl = (s: string) =>
+  s.replace(/[\u0000-\u001F\u007F]/g, '').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '');
+const hardClean = (s: any) => stripCtl(stripQuotes(norm(s).trim()));
 const mask = (s: any) => {
-  const v = norm(s);
+  const v = hardClean(s);
   if (!v) return '';
   return v.length <= 8 ? '*'.repeat(v.length) : v.slice(0,4)+'…'+v.slice(-4);
 };
 const maskBearer = (v: any) => {
-  const x = norm(v);
+  const x = hardClean(v);
   const m = x.match(/^\s*(Bearer)\s+(.+)$/i);
   return m ? `${m[1]} ${mask(m[2])}` : mask(x);
 };
 
+const eq = (a: string, b: string) => a === b;
+
 function allowUnsigned() {
-  const v = norm(process.env.QN_ALLOW_UNSIGNED);
+  const v = hardClean(process.env.QN_ALLOW_UNSIGNED);
   return v === '1' || v.toLowerCase() === 'true';
 }
 
 function expectedFor(endpoint: string) {
   const e = (endpoint || '').toLowerCase();
-  if (e === 'pumpfun') return norm(process.env.QN_PUMPFUN_TOKEN) || norm(process.env.QN_STREAMS_TOKEN);
-  if (e === 'quicknode') return norm(process.env.QN_STREAMS_TOKEN) || norm(process.env.QN_PUMPFUN_TOKEN);
-  return norm(process.env.QN_STREAMS_TOKEN) || norm(process.env.QN_PUMPFUN_TOKEN);
+  if (e === 'pumpfun') return hardClean(process.env.QN_PUMPFUN_TOKEN) || hardClean(process.env.QN_STREAMS_TOKEN);
+  if (e === 'quicknode') return hardClean(process.env.QN_STREAMS_TOKEN) || hardClean(process.env.QN_PUMPFUN_TOKEN);
+  return hardClean(process.env.QN_STREAMS_TOKEN) || hardClean(process.env.QN_PUMPFUN_TOKEN);
 }
 
 function segsFromCtxOrUrl(req: Request, ctx?: Ctx): string[] {
@@ -37,36 +44,82 @@ function segsFromCtxOrUrl(req: Request, ctx?: Ctx): string[] {
   return i >= 0 ? parts.slice(i + 1) : [];
 }
 
-function extractCandidates(req: Request): string[] {
+function extractCandidates(req: Request): { list: string[], rawAuth: string, bearer: string } {
   const url = new URL(req.url);
   const h = req.headers;
-  const auth = norm(h.get('authorization'));
+
+  const rawAuth = hardClean(h.get('authorization'));
   let bearer = '';
-  const m = auth.match(/^\s*Bearer\s+(.+)$/i);
-  if (m) bearer = norm(m[1]);
-  return [
+  const m = rawAuth.match(/^\s*Bearer\s+(.+)$/i);
+  if (m) bearer = hardClean(m[1]);
+
+  const list = [
     bearer,
-    norm(h.get('x-qn-token')),
-    norm(h.get('x-quicknode-token')),
-    norm(h.get('x-security-token')),
-    norm(h.get('x-webhook-token')),
-    norm(h.get('x-verify-token')),
-    norm(h.get('x-token')),
-    norm(h.get('x-auth-token')),
-    norm(h.get('x-api-key')),
-    norm(h.get('quicknode-token')),
-    norm(url.searchParams.get('token')),
+    rawAuth, // ganzer Authorization-Wert als Kandidat
+    hardClean(h.get('x-qn-token')),
+    hardClean(h.get('x-quicknode-token')),
+    hardClean(h.get('x-security-token')),
+    hardClean(h.get('x-webhook-token')),
+    hardClean(h.get('x-verify-token')),
+    hardClean(h.get('x-token')),
+    hardClean(h.get('x-auth-token')),
+    hardClean(h.get('x-api-key')),
+    hardClean(h.get('quicknode-token')),
+    hardClean(url.searchParams.get('token')),
   ].filter(Boolean);
+
+  return { list, rawAuth, bearer };
 }
 
-function tokenOk(req: Request, endpoint: string) {
+function tokenOkAndWhy(req: Request, endpoint: string) {
   const want = expectedFor(endpoint);
-  if (!want) return true;
-  const cands = extractCandidates(req);
-  if (cands.includes(want)) return true;
-  return allowUnsigned();
+  const { list, rawAuth, bearer } = extractCandidates(req);
+
+  const result = {
+    ok: false,
+    want,
+    wantLen: want.length,
+    bearerLen: bearer.length,
+    rawAuthLen: rawAuth.length,
+    matched: {
+      exact: false,
+      bearerExact: false,
+      rawAuthExact: false,
+    }
+  };
+
+  if (!want) {
+    result.ok = true; // kein Secret gesetzt -> durchlassen
+    return result;
+  }
+
+  // 1) Kandidaten exakt
+  if (list.includes(want)) {
+    result.ok = true;
+    result.matched.exact = true;
+    return result;
+  }
+
+  // 2) "Bearer <want>" exakt
+  if (list.includes(`Bearer ${want}`)) {
+    result.ok = true;
+    result.matched.bearerExact = true;
+    return result;
+  }
+
+  // 3) letzter Rettungsring (Dev)
+  if (allowUnsigned()) {
+    result.ok = true;
+    return result;
+  }
+
+  // 4) rawAuth exakt? (zur Diagnose)
+  if (eq(rawAuth, want)) result.matched.rawAuthExact = true;
+
+  return result;
 }
 
+// ---------- handlers ----------
 export async function GET(req: Request, ctx: Ctx) {
   const segs = segsFromCtxOrUrl(req, ctx);
   const endpoint = (segs[0] || '(root)').toLowerCase();
@@ -98,6 +151,7 @@ export async function POST(req: Request, ctx: Ctx) {
   const segs = segsFromCtxOrUrl(req, ctx);
   const endpoint = (segs[0] || '(root)').toLowerCase();
 
+  // Header-Vorschau in Logs
   try {
     const names = ['authorization','x-qn-token','x-quicknode-token','x-security-token','x-webhook-token','x-verify-token','x-token','x-auth-token','x-api-key','quicknode-token'];
     const preview: Record<string,string> = {};
@@ -105,39 +159,46 @@ export async function POST(req: Request, ctx: Ctx) {
     console.log('[streams][hdr]', endpoint, preview);
   } catch {}
 
+  const check = tokenOkAndWhy(req, endpoint);
+
+  // Engine optional antickern (unabhängig vom Token – nur wenn ok)
   let raw = '';
   try { raw = await req.text(); } catch {}
   let payload: any = {};
   try { payload = raw ? JSON.parse(raw) : {}; } catch {}
-
-  try {
-    const mod: any = await import('@/lib/paper/engine');
-    const wh = mod.onWebhook || mod.handleWebhook || mod.webhook;
-    if (typeof wh === 'function') await wh({ source: endpoint, path: segs.join('/'), payload });
-    const tickFn = mod.onTick || mod.tick || mod.default;
-    if (typeof tickFn === 'function') {
-      await tickFn({
-        mint: payload?.mint || payload?.tokenMint || payload?.symbol || 'UNKNOWN',
-        symbol: payload?.symbol || payload?.mint || 'UNK',
-        priceUsd: Number(payload?.priceUsd ?? payload?.usd ?? payload?.amountUsd) || undefined,
-        volumeUsd1m: Number(payload?.vol1m || payload?.volumeUsd1m || 0) || 0,
-        volumeUsd5m: Number(payload?.vol5m || payload?.volumeUsd5m || 0) || 0,
-        txBuys1m: Number(payload?.buys1m || 0) || 0,
-        txSells1m: Number(payload?.sells1m || 0) || 0,
-      });
-    }
-  } catch {}
-
-  if (!tokenOk(req, endpoint)) {
-    const want = expectedFor(endpoint);
-    const got = extractCandidates(req).map(mask);
-    return new NextResponse(JSON.stringify({
-      ok:false, reason:'BAD_TOKEN',
-      expectedPreview: mask(want),
-      gotCandidates: got,
-      allowUnsigned: allowUnsigned(),
-    }), { status: 401, headers: {'content-type':'application/json'} });
+  if (check.ok) {
+    try {
+      const mod: any = await import('@/lib/paper/engine');
+      const wh = mod.onWebhook || mod.handleWebhook || mod.webhook;
+      if (typeof wh === 'function') await wh({ source: endpoint, path: segs.join('/'), payload });
+      const tickFn = mod.onTick || mod.tick || mod.default;
+      if (typeof tickFn === 'function') {
+        await tickFn({
+          mint: payload?.mint || payload?.tokenMint || payload?.symbol || 'UNKNOWN',
+          symbol: payload?.symbol || payload?.mint || 'UNK',
+          priceUsd: Number(payload?.priceUsd ?? payload?.usd ?? payload?.amountUsd) || undefined,
+          volumeUsd1m: Number(payload?.vol1m || payload?.volumeUsd1m || 0) || 0,
+          volumeUsd5m: Number(payload?.vol5m || payload?.volumeUsd5m || 0) || 0,
+          txBuys1m: Number(payload?.buys1m || 0) || 0,
+          txSells1m: Number(payload?.sells1m || 0) || 0,
+        });
+      }
+    } catch {}
+    return NextResponse.json({ ok:true, endpoint });
   }
 
-  return NextResponse.json({ ok:true, endpoint });
+  // Diagnose-Log (maskiert)
+  try {
+    console.log('[streams][cmp]', endpoint, {
+      want: mask(check.want),
+      wantLen: check.wantLen,
+      matched: check.matched,
+    });
+  } catch {}
+
+  return new NextResponse(JSON.stringify({
+    ok:false, reason:'BAD_TOKEN',
+    expectedPreview: mask(check.want),
+    allowUnsigned: allowUnsigned(),
+  }), { status: 401, headers: {'content-type':'application/json'} });
 }
