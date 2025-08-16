@@ -1,21 +1,52 @@
+// T0_PAPER_TICK_ROUTE_V2.ts
 import { NextResponse } from 'next/server';
-import { onTick } from '@/lib/paper/engine';
-import type { PaperTick } from '@/lib/paper/types';
+import * as Engine from '@/lib/paper/engine';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+type Incoming = {
+  mint?: string;
+  symbol?: string;
+  priceUsd?: number;
+  volumeUsd1m?: number;
+  volumeUsd5m?: number;
+  txBuys1m?: number;
+  txSells1m?: number;
+  source?: string;
+};
 
 export async function POST(req: Request) {
-  const payload = await req.json().catch(() => ({}));
-  const t: PaperTick = {
-    mint: payload.mint, symbol: payload.symbol, name: payload.name,
-    chain: 'Solana',
-    priceUsd: Number(payload.priceUsd || payload.price || 0),
-    mcapUsd: Number(payload.mcapUsd || 0),
-    volumeUsd1m: Number(payload.volumeUsd1m || 0),
-    volumeUsd5m: Number(payload.volumeUsd5m || 0),
-    txBuys1m: Number(payload.txBuys1m || 0),
-    txSells1m: Number(payload.txSells1m || 0),
+  let body: Incoming = {};
+  try { body = await req.json(); } catch {}
+
+  // Mindestanforderung: wir brauchen eine ID -> mint oder symbol
+  const mint = ((body.mint ?? body.symbol) ?? '').toString().trim();
+  if (!mint) {
+    return NextResponse.json({ ok: false, error: 'MINT_REQUIRED' }, { status: 400 });
+  }
+
+  const t = {
+    mint,
+    symbol: body.symbol ?? undefined,
+    priceUsd: typeof body.priceUsd === 'number' ? body.priceUsd : undefined,
+    volumeUsd1m: Number(body.volumeUsd1m ?? 0) || 0,
+    volumeUsd5m: Number(body.volumeUsd5m ?? 0) || 0,
+    txBuys1m: Number(body.txBuys1m ?? 0) || 0,
+    txSells1m: Number(body.txSells1m ?? 0) || 0,
+    source: body.source ?? 'manual'
   };
+
+  // onTick kann default export oder named sein – beide Varianten unterstützen
+  const onTick = (Engine as any).onTick || (Engine as any).default;
+  if (typeof onTick !== 'function') {
+    return NextResponse.json({ ok: false, error: 'ENGINE_TICK_NOT_AVAILABLE' }, { status: 500 });
+  }
+
   await onTick(t);
   return NextResponse.json({ ok: true });
+}
+
+export async function GET() {
+  return NextResponse.json({ ok: true, hint: 'POST JSON to trigger paper tick' });
 }
