@@ -1,4 +1,3 @@
-// T0_SETTINGS_RULES_ROUTE.ts
 import { NextResponse } from 'next/server';
 import * as Vol from '@/lib/store/volatile';
 import { getEffectiveConfig } from '@/lib/paper/engine';
