@@ -1,5 +1,5 @@
-// T0_VOLATILE_STORE.ts
-// Einfacher In-Memory KV-Store (Serverless: best effort)
+// Volatile In-Memory KV (serverless best-effort)
+
 const mem = new Map<string, any>();
 
 function setPath(obj:any, path:string, val:any) {
@@ -60,3 +60,13 @@ export function getBoolean(key:string, def:boolean) {
   const s = String(v).toLowerCase();
   return s==='1' || s==='true' || s==='yes' || s==='on';
 }
+
+/** ------- Abwärtskompatible Aliases (kvGet/kvSet…) ------- */
+export const kvGet = get;
+export const kvSet = set;
+export const kvMerge = merge;
+export function kvNumber(key:string, def:number) { return getNumber(key, def); }
+export function kvBoolean(key:string, def:boolean) { return getBoolean(key, def); }
+
+/** optionaler Default-Export */
+export default { get, set, merge, getNumber, getBoolean, kvGet, kvSet, kvMerge, kvNumber, kvBoolean };
