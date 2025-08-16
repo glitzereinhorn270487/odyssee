@@ -1,17 +1,21 @@
 import { NextResponse } from 'next/server';
+import { kvGet, kvSet } from '@/lib/store/volatile';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// --- helpers -------------------------------------------------
+function wantTokenVar(): string {
+  return process.env.PUMPFUN_WEBHOOK_TOKEN || process.env.PUMPFUN_TOKEN || '';
+}
 function getQueryToken(req: Request): string {
-  try { return new URL(req.url).searchParams.get('token') || ''; }
-  catch { return ''; }
+  try { return new URL(req.url).searchParams.get('token') || ''; } catch { return ''; }
 }
 function getHeaderToken(req: Request): string {
   const auth = req.headers.get('authorization') || '';
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  const candidates = [
-    bearer,
+  const cands = [
+    getQueryToken(req), bearer,
     req.headers.get('x-qn-token') || '',
     req.headers.get('x-quicknode-token') || '',
     req.headers.get('x-security-token') || '',
@@ -22,41 +26,39 @@ function getHeaderToken(req: Request): string {
     req.headers.get('x-api-key') || '',
     req.headers.get('quicknode-token') || '',
   ].filter(Boolean);
-  return candidates[0] || '';
+  return cands[0] || '';
 }
-async function logHeaders(prefix: string, req: Request) {
-  const out: Record<string, string> = {
-    authorization: req.headers.get('authorization') || '',
-    'x-qn-token': req.headers.get('x-qn-token') || '',
-    'x-quicknode-token': req.headers.get('x-quicknode-token') || '',
-    'x-security-token': req.headers.get('x-security-token') || '',
-    'x-webhook-token': req.headers.get('x-webhook-token') || '',
-    'x-verify-token': req.headers.get('x-verify-token') || '',
-    'x-token': req.headers.get('x-token') || '',
-    'x-auth-token': req.headers.get('x-auth-token') || '',
-    'x-api-key': req.headers.get('x-api-key') || '',
-    'quicknode-token': req.headers.get('quicknode-token') || '',
-  };
-  console.info('[streams][hdr]', prefix, out);
+async function bump(kind: 'quicknode'|'pumpfun', bytes: number) {
+  const cKey = `metrics:${kind}:count`;
+  const bKey = `metrics:${kind}:bytes`;
+  const oldC = Number(await kvGet(cKey)) || 0;
+  const oldB = Number(await kvGet(bKey)) || 0;
+  await kvSet(cKey, oldC + 1);
+  await kvSet(bKey, oldB + (bytes || 0));
 }
-function authorize(req: Request, envVarName: string) {
-  const want = (process.env[envVarName] as string) || '';
-  const got = getQueryToken(req) || getHeaderToken(req);
-  const ok = !!want && got === want;
-  return { ok, wantLen: want.length, gotLen: got.length };
-}
+// ------------------------------------------------------------
 
 export async function POST(req: Request) {
-  await logHeaders('pumpfun', req);
-  const { ok } = authorize(req, 'QN_PUMPFUN_TOKEN');
-  if (!ok) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+  const allowUnsigned = process.env.PUMPFUN_ALLOW_UNSIGNED === '1';
+  const want = wantTokenVar();
+  const got = getHeaderToken(req);
+  const authorized = allowUnsigned || (!!want && got === want);
+  if (!authorized) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
 
-  let payload: any = null;
-  try { payload = await req.json(); } catch {}
-  return NextResponse.json({ ok: true, source: 'pumpfun', received: !!payload });
+  const clone = req.clone();
+  let raw = '';
+  try { raw = await clone.text(); } catch {}
+  let payload: any = {};
+  try { payload = raw ? JSON.parse(raw) : await req.json(); } catch {}
+
+  const cLen = Number(req.headers.get('content-length')) || 0;
+  const bytes = cLen || (raw ? Buffer.byteLength(raw, 'utf8') : Buffer.byteLength(JSON.stringify(payload || {}), 'utf8'));
+  await bump('pumpfun', bytes);
+
+  // TODO: Hier ggf. euer internes Signal/Engine-Handling aufrufen
+  return NextResponse.json({ ok: true });
 }
 
 export async function GET() {
-  return NextResponse.json({ ok: true, kind: 'pumpfun' });
+  return NextResponse.json({ ok: true, source: 'pumpfun' });
 }
-
