@@ -10,23 +10,13 @@ export async function POST(req: Request) {
   const level = String(body?.level ?? 'standard');
   const status = 'active';
 
-  // Bot aktivieren + Status setzen (best-effort)
-  try {
-    if (typeof KV.kvSet === 'function') KV.kvSet('bot.active', true);
-    if (typeof KV.set === 'function')   KV.set('bot.active', true);
-  } catch {}
-
-  try {
-    if (typeof KV.kvSet === 'function') KV.kvSet('bot:status', { status, level });
-  } catch {}
+  try { KV.kvSet?.('bot.active', true); KV.set?.('bot.active', true); } catch {}
+  try { KV.kvSet?.('bot:status', { status, level }); } catch {}
 
   return NextResponse.json({ ok: true, status, level });
 }
 
 export async function GET() {
-  const active =
-    typeof KV.getBoolean === 'function'
-      ? KV.getBoolean('bot.active', true)
-      : true;
+  const active = KV.getBoolean?.('bot.active', true) ?? true;
   return NextResponse.json({ ok: true, status: active ? 'active' : 'inactive', active });
 }
