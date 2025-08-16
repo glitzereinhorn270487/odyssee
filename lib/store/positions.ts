@@ -1,25 +1,45 @@
-// Einfacher In-Memory Positions-Store, API-kompatibel zur Engine + Analytics
+// In-Memory Positions-Store, kompatibel zu Engine + Analytics + Detail-API
 
 export type Position = {
   id: string;
   chain: 'SOL';
   name: string;
   category: 'Raydium' | 'PumpFun' | 'Test';
+
+  // Basis-Metriken
   marketcap?: number;
   volume?: number;
-  investmentUsd: number;
-  pnlUsd: number;
+
+  // Invest / PnL – beide Schreibweisen zulassen
+  investmentUsd?: number;
+  investmentUSD?: number;
+  pnlUsd?: number;
+  pnlUSD?: number;
+
   taxBuyPct?: number;
   taxSellPct?: number;
+
   openedAt: number;
   status: 'open' | 'closed';
   reason?: string;
+
+  // Für Detail-View (/api/positions/[id])
+  holders?: number;
+  txCount?: { buy: number; sell: number };
+  scores?: {
+    scorex: number;
+    risk: number;
+    fomo: number;
+    pumpDumpProb: number;
+  };
+
+  // Sonstiges
   meta?: Record<string, any>;
 };
 
 const mem = new Map<string, Position>();
 
-/** Basis-API */
+/* ------------------------- Basis-API ------------------------- */
 export async function listPositions(): Promise<Position[]> {
   return Array.from(mem.values());
 }
@@ -33,7 +53,10 @@ export async function openPosition(p: Position): Promise<Position> {
   return p;
 }
 
-export async function updatePosition(id: string, patch: Partial<Position>): Promise<Position | null> {
+export async function updatePosition(
+  id: string,
+  patch: Partial<Position>
+): Promise<Position | null> {
   const cur = mem.get(id);
   if (!cur) return null;
   const upd: Position = { ...cur, ...patch };
@@ -41,7 +64,10 @@ export async function updatePosition(id: string, patch: Partial<Position>): Prom
   return upd;
 }
 
-export async function closePosition(id: string, reason?: string): Promise<Position | null> {
+export async function closePosition(
+  id: string,
+  reason?: string
+): Promise<Position | null> {
   const cur = mem.get(id);
   if (!cur) return null;
   const upd: Position = { ...cur, status: 'closed', reason: reason ?? 'closed' };
@@ -49,20 +75,15 @@ export async function closePosition(id: string, reason?: string): Promise<Positi
   return upd;
 }
 
-/** Zusatz-API, die von Analytics/Treasury erwartet wird */
+/* ----------------------- Helper für Analytics ----------------------- */
 export async function getOpenPositions(): Promise<Position[]> {
-  return (await listPositions()).filter(p => p.status === 'open');
+  return (await listPositions()).filter((p) => p.status === 'open');
 }
 
 export async function getClosedPositions(): Promise<Position[]> {
-  return (await listPositions()).filter(p => p.status === 'closed');
+  return (await listPositions()).filter((p) => p.status === 'closed');
 }
 
-/**
- * setOpenPositions / setClosedPositions:
- * Ersetzt jeweils die aktuelle Menge offener/geschlossener Positionen im In-Memory Store.
- * Geschlossene bleiben bei setOpenPositions unverändert (und umgekehrt).
- */
 export async function setOpenPositions(list: Position[]): Promise<boolean> {
   // entferne aktuelle "open"
   for (const [id, p] of mem.entries()) {
@@ -86,3 +107,4 @@ export async function setClosedPositions(list: Position[]): Promise<boolean> {
   }
   return true;
 }
+
