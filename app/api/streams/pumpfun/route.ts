@@ -1,2 +1,2 @@
-// delegiert GET/POST an die Catch-All-Route ../[...any]/route
-export { GET, POST } from '../[...any]/route';
+// delegiert vollständig auf die Catch-All-Route (inkl. runtime/dynamic)
+export { GET, POST, runtime, dynamic } from '../[...any]/route';
