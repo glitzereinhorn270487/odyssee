@@ -1,9 +1,9 @@
-// T0_STREAMS_CATCHALL_V6.ts
+// T0_STREAMS_CATCHALL_V6_FIX.ts
 import { NextResponse } from 'next/server';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-type Ctx = { params: { any?: string[] } };
+type Ctx = { params?: { any?: string[] } };
 
 const norm = (s: any) => String(s ?? '').trim().replace(/^['"]|['"]$/g, '');
 const mask = (s: any) => {
@@ -21,12 +21,22 @@ function allowUnsigned() {
   const v = norm(process.env.QN_ALLOW_UNSIGNED);
   return v === '1' || v.toLowerCase() === 'true';
 }
+
 function expectedFor(endpoint: string) {
   const e = (endpoint || '').toLowerCase();
   if (e === 'pumpfun') return norm(process.env.QN_PUMPFUN_TOKEN) || norm(process.env.QN_STREAMS_TOKEN);
   if (e === 'quicknode') return norm(process.env.QN_STREAMS_TOKEN) || norm(process.env.QN_PUMPFUN_TOKEN);
   return norm(process.env.QN_STREAMS_TOKEN) || norm(process.env.QN_PUMPFUN_TOKEN);
 }
+
+function segsFromCtxOrUrl(req: Request, ctx?: Ctx): string[] {
+  const any = (ctx as any)?.params?.any;
+  if (Array.isArray(any)) return any;
+  const parts = new URL(req.url).pathname.split('/').filter(Boolean);
+  const i = parts.indexOf('streams');
+  return i >= 0 ? parts.slice(i + 1) : [];
+}
+
 function extractCandidates(req: Request): string[] {
   const url = new URL(req.url);
   const h = req.headers;
@@ -48,16 +58,17 @@ function extractCandidates(req: Request): string[] {
     norm(url.searchParams.get('token')),
   ].filter(Boolean);
 }
+
 function tokenOk(req: Request, endpoint: string) {
   const want = expectedFor(endpoint);
   if (!want) return true;
   const cands = extractCandidates(req);
   if (cands.includes(want)) return true;
-  return allowUnsigned(); // temporärer Bypass
+  return allowUnsigned();
 }
 
 export async function GET(req: Request, ctx: Ctx) {
-  const segs = ctx.params.any ?? [];
+  const segs = segsFromCtxOrUrl(req, ctx);
   const endpoint = (segs[0] || '(root)').toLowerCase();
   const url = new URL(req.url);
   const inspect = url.searchParams.get('inspect') === '1';
@@ -84,10 +95,9 @@ export async function GET(req: Request, ctx: Ctx) {
 }
 
 export async function POST(req: Request, ctx: Ctx) {
-  const segs = ctx.params.any ?? [];
+  const segs = segsFromCtxOrUrl(req, ctx);
   const endpoint = (segs[0] || '(root)').toLowerCase();
 
-  // Maskierte Header in Logs (für QuickNode-Test)
   try {
     const names = ['authorization','x-qn-token','x-quicknode-token','x-security-token','x-webhook-token','x-verify-token','x-token','x-auth-token','x-api-key','quicknode-token'];
     const preview: Record<string,string> = {};
@@ -95,7 +105,6 @@ export async function POST(req: Request, ctx: Ctx) {
     console.log('[streams][hdr]', endpoint, preview);
   } catch {}
 
-  // Payload lesen (optional an Engine weitergereicht)
   let raw = '';
   try { raw = await req.text(); } catch {}
   let payload: any = {};
