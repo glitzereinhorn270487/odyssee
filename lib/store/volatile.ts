@@ -1,13 +1,62 @@
-// Simple in-memory store (V1.0). V1.1 -> Upstash/Vercel KV.
-const g = globalThis as any;
-g.__VOLATILE_STORE__ ||= new Map<string, any>();
+// T0_VOLATILE_STORE.ts
+// Einfacher In-Memory KV-Store (Serverless: best effort)
+const mem = new Map<string, any>();
 
-export async function kvGet<T = any>(key: string): Promise<T | undefined> {
-  return g.__VOLATILE_STORE__.get(key);
+function setPath(obj:any, path:string, val:any) {
+  const parts = path.split('.');
+  let cur = obj;
+  for (let i=0;i<parts.length-1;i++){
+    const k=parts[i]; cur[k] = cur[k] ?? {}; cur = cur[k];
+  }
+  cur[parts[parts.length-1]] = val;
 }
-export async function kvSet(key: string, value: any): Promise<void> {
-  g.__VOLATILE_STORE__.set(key, value);
+function getPath(obj:any, path:string) {
+  const parts = path.split('.');
+  let cur = obj;
+  for (let i=0;i<parts.length;i++){
+    if (cur == null) return undefined;
+    cur = cur[parts[i]];
+  }
+  return cur;
 }
-export async function kvDel(key: string): Promise<void> {
-  g.__VOLATILE_STORE__.delete(key);
+
+export function get(key:string, def?:any) {
+  if (!mem.has('__root')) mem.set('__root', {});
+  const root = mem.get('__root');
+  const v = key.includes('.') ? getPath(root, key) : root[key];
+  return v === undefined ? def : v;
+}
+
+export function set(key:string, val:any) {
+  if (!mem.has('__root')) mem.set('__root', {});
+  const root = mem.get('__root');
+  if (key.includes('.')) setPath(root, key, val);
+  else root[key] = val;
+  mem.set('__root', root);
+  return true;
+}
+
+export function merge(obj:Record<string,any>) {
+  if (!mem.has('__root')) mem.set('__root', {});
+  const root = mem.get('__root');
+  for (const [k,v] of Object.entries(obj)) {
+    if (k.includes('.')) setPath(root, k, v);
+    else root[k] = v;
+  }
+  mem.set('__root', root);
+  return true;
+}
+
+export function getNumber(key:string, def:number) {
+  const v = get(key);
+  const n = Number(v);
+  return Number.isFinite(n) ? n : def;
+}
+
+export function getBoolean(key:string, def:boolean) {
+  const v = get(key);
+  if (v === undefined) return def;
+  if (typeof v === 'boolean') return v;
+  const s = String(v).toLowerCase();
+  return s==='1' || s==='true' || s==='yes' || s==='on';
 }
