@@ -22,21 +22,27 @@ function logHeaders(prefix: string, req: Request) {
   console.info('[streams][hdr]', prefix, out);
 }
 
+function getQueryToken(req: Request): string {
+  try { return new URL(req.url).searchParams.get('token') || ''; }
+  catch { return ''; }
+}
+
 function getHeaderToken(req: Request): string {
   const auth = req.headers.get('authorization') || '';
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   const candidates = [
-    bearer,
-    req.headers.get('x-qn-token') || '',
-    req.headers.get('x-quicknode-token') || '',
-    req.headers.get('x-security-token') || '',
-    req.headers.get('x-webhook-token') || '',
-    req.headers.get('x-verify-token') || '',
-    req.headers.get('x-token') || '',
-    req.headers.get('x-auth-token') || '',
-    req.headers.get('x-api-key') || '',
-    req.headers.get('quicknode-token') || '',
-  ].filter(Boolean);
+  getQueryToken(req), // <— Query-Token zuerst prüfen
+  bearer,
+  req.headers.get('x-qn-token') || '',
+  req.headers.get('x-quicknode-token') || '',
+  req.headers.get('x-security-token') || '',
+  req.headers.get('x-webhook-token') || '',
+  req.headers.get('x-verify-token') || '',
+  req.headers.get('x-token') || '',
+  req.headers.get('x-auth-token') || '',
+  req.headers.get('x-api-key') || '',
+  req.headers.get('quicknode-token') || '',
+].filter(Boolean);
   return candidates[0] || '';
 }
 
@@ -47,6 +53,12 @@ function authorize(req: Request, envVarName: string) {
   const ok = allowUnsigned || (!!want && got === want);
   return { ok, wantLen: want.length };
 }
+
+function getQueryToken(req: Request): string {
+  try { return new URL(req.url).searchParams.get('token') || ''; }
+  catch { return ''; }
+}
+
 
 async function readBody(req: Request) {
   try {
