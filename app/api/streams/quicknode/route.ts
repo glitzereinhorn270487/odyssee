@@ -1,66 +1,67 @@
 import { NextResponse } from 'next/server';
-import { kvGet, kvSet } from '@/lib/store/volatile';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// --- helpers -------------------------------------------------
-function wantTokenVar(): string {
-  return process.env.QN_WEBHOOK_TOKEN || process.env.QUICKNODE_WEBHOOK_TOKEN || '';
-}
+// --- simple in-memory counters (reset on cold start) ---
+type Meter = { hits: number; bytes: number; since: number };
+const meterQuickNode: Meter = { hits: 0, bytes: 0, since: Date.now() };
+
+// Token aus Query oder Header ziehen
 function getQueryToken(req: Request): string {
-  try { return new URL(req.url).searchParams.get('token') || ''; } catch { return ''; }
+  try { return new URL(req.url).searchParams.get('token') || ''; }
+  catch { return ''; }
 }
 function getHeaderToken(req: Request): string {
-  const auth = req.headers.get('authorization') || '';
+  const h = (name: string) => req.headers.get(name) || '';
+  const auth = h('authorization');
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  const cands = [
-    getQueryToken(req), bearer,
-    req.headers.get('x-qn-token') || '',
-    req.headers.get('x-quicknode-token') || '',
-    req.headers.get('x-security-token') || '',
-    req.headers.get('x-webhook-token') || '',
-    req.headers.get('x-verify-token') || '',
-    req.headers.get('x-token') || '',
-    req.headers.get('x-auth-token') || '',
-    req.headers.get('x-api-key') || '',
-    req.headers.get('quicknode-token') || '',
+  const candidates = [
+    getQueryToken(req),
+    bearer,
+    h('x-qn-token'),
+    h('x-quicknode-token'),
+    h('x-security-token'),
+    h('x-webhook-token'),
+    h('x-verify-token'),
+    h('x-token'),
+    h('x-auth-token'),
+    h('x-api-key'),
+    h('quicknode-token'),
   ].filter(Boolean);
-  return cands[0] || '';
+  return candidates[0] || '';
 }
-async function bump(kind: 'quicknode'|'pumpfun', bytes: number) {
-  const cKey = `metrics:${kind}:count`;
-  const bKey = `metrics:${kind}:bytes`;
-  const oldC = Number(await kvGet(cKey)) || 0;
-  const oldB = Number(await kvGet(bKey)) || 0;
-  await kvSet(cKey, oldC + 1);
-  await kvSet(bKey, oldB + (bytes || 0));
+function authorized(req: Request, wantEnv: string) {
+  const allowUnsigned = process.env.QN_ALLOW_UNSIGNED === '1';
+  const want = (process.env[wantEnv] as string) || '';
+  const got = getHeaderToken(req);
+  const ok = allowUnsigned || (!!want && got === want);
+  return ok;
 }
-// ------------------------------------------------------------
 
 export async function POST(req: Request) {
-  const allowUnsigned = process.env.QN_ALLOW_UNSIGNED === '1';
-  const want = wantTokenVar();
-  const got = getHeaderToken(req);
-  const authorized = allowUnsigned || (!!want && got === want);
-  if (!authorized) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+  if (!authorized(req, 'QN_WEBHOOK_TOKEN')) {
+    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+  }
 
-  const clone = req.clone();
-  let raw = '';
-  try { raw = await clone.text(); } catch {}
-  let payload: any = {};
-  try { payload = raw ? JSON.parse(raw) : await req.json(); } catch {}
+  let body: any = null;
+  try { body = await req.json(); } catch { body = null; }
 
-  // Bytes aus Header oder Fallback berechnen
-  const cLen = Number(req.headers.get('content-length')) || 0;
-  const bytes = cLen || (raw ? Buffer.byteLength(raw, 'utf8') : Buffer.byteLength(JSON.stringify(payload || {}), 'utf8'));
-  await bump('quicknode', bytes);
+  // Metering
+  try {
+    const bytes = Number(req.headers.get('content-length') || 0) || JSON.stringify(body ?? {}).length;
+    meterQuickNode.hits += 1; meterQuickNode.bytes += bytes;
+  } catch {}
 
-  // TODO: Hier ggf. euer internes Signal/Engine-Handling aufrufen
+  // Hier könntest du später body in deine Engine schieben
+  // z.B. await fetch(new URL('/api/paper/tick', req.url), { method: 'POST', body: JSON.stringify({ source: 'quicknode', data: body })}).catch(()=>{});
+
   return NextResponse.json({ ok: true });
 }
 
-export async function GET() {
-  // Mini-Health
-  return NextResponse.json({ ok: true, source: 'quicknode' });
+// Optionaler GET, um schnell "lebt der Endpoint?" zu prüfen
+export async function GET(req: Request) {
+  const expose = process.env.QN_ALLOW_UNSIGNED === '1' || authorized(req, 'QN_WEBHOOK_TOKEN');
+  if (!expose) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+  return NextResponse.json({ ok: true, meter: meterQuickNode });
 }
