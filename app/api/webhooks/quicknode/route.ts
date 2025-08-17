@@ -48,7 +48,7 @@ function getHeaderToken(req: Request): string {
 }
 
 function authorize(req: Request): AuthResult {
-  const allowUnsigned = process.env.QN_ALLOW_UNSIGNED === '1';
+  const allowUnsigned = process.env.QN_ALLOW_UNSIGNED === '0';
   const want = (process.env.QN_WEBHOOK_TOKEN as string) || '';
   const got = getHeaderToken(req);
   const ok = allowUnsigned || !want || got === want;
