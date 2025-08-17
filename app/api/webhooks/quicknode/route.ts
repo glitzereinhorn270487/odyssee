@@ -1,137 +1,92 @@
-// app/api/webhooks/quicknode/route.ts
+// /app/api/webhooks/quicknode/route.ts
 import { NextResponse } from 'next/server';
-import * as Vol from '@/lib/store/volatile';
+import { addSignal } from '@/lib/watchlist';
 
 export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
 
-// ---- token handling ----
+const RAYDIUM_AMM = '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8';
+
 function getQueryToken(req: Request): string {
   try { return new URL(req.url).searchParams.get('token') || ''; }
   catch { return ''; }
 }
 
-function getHeaderToken(req: Request): string {
-  const auth = req.headers.get('authorization') || '';
-  const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  const candidates = [
-    getQueryToken(req),
-    bearer,
-    req.headers.get('x-qn-token') || '',
-    req.headers.get('x-quicknode-token') || '',
-    req.headers.get('x-security-token') || '',
-    req.headers.get('x-webhook-token') || '',
-    req.headers.get('x-verify-token') || '',
-    req.headers.get('x-token') || '',
-    req.headers.get('x-auth-token') || '',
-    req.headers.get('x-api-key') || '',
-    req.headers.get('quicknode-token') || '',
-  ].filter(Boolean);
-  return candidates[0] || '';
+function okAuth(req: Request) {
+  const want = (process.env.QN_WEBHOOK_TOKEN || process.env.QNODE_WEBHOOK_TOKEN || '').trim();
+  if (!want) return true;                       // Kein Token hinterlegt -> akzeptieren (dev)
+  const got = getQueryToken(req).trim();
+  return got && got === want;
 }
 
-function authorize(req: Request) {
-  const allowUnsigned = process.env.QN_ALLOW_UNSIGNED === '1';
-  const want = (process.env.QN_WEBHOOK_TOKEN || process.env.WEBHOOK_TOKEN || '').trim();
-  const got = getHeaderToken(req);
-  const ok = allowUnsigned || (!!want && got === want);
-  return { ok, wantLen: want.length };
+function pickLogs(body: any): string[] {
+  // Versuche mehrere mögliche Pfade aus QuickNode/Solana-Payloads
+  const fromValueMeta =
+    body?.value?.transaction?.meta?.logMessages ??
+    body?.value?.meta?.logMessages;
+
+  const fromMsg = body?.message?.logs;
+  const fromLogs = body?.logs;
+
+  const logs = (fromValueMeta || fromMsg || fromLogs || []) as any[];
+  return logs.filter((l) => typeof l === 'string').slice(0, 3); // kurz halten
 }
 
-// ---- classify helpers (best-effort; QuickNode filter sollte Grobarbeit machen) ----
-function classify(raw: any) {
-  const text = JSON.stringify(raw || {}).toLowerCase();
-
-  const isRaydiumPool =
-    text.includes('raydium') ||
-    text.includes('amm') ||
-    text.includes('create_pool') ||
-    text.includes('initialize_pool') ||
-    text.includes('liquidity') && text.includes('initialize');
-
-  const isContractRevoke =
-    text.includes('setauthority') && (text.includes('"newauthority":null') || text.includes('"new_authority":null')) ||
-    text.includes('revoke') && text.includes('mint');
-
-  const isLiquidityBurn =
-    (text.includes('burn') && text.includes('liquidity')) ||
-    text.includes('burn_lp') ||
-    text.includes('burned_liquidity');
-
-  let kind: 'raydium_pool' | 'contract_revoke' | 'lp_burn' | 'other' = 'other';
-  if (isRaydiumPool) kind = 'raydium_pool';
-  else if (isContractRevoke) kind = 'contract_revoke';
-  else if (isLiquidityBurn) kind = 'lp_burn';
-
-  return { kind };
+function pickAccountKeys(body: any): string[] {
+  const keys1 = body?.message?.accountKeys;
+  const keys2 = body?.value?.transaction?.message?.accountKeys;
+  const raw = (keys1 || keys2 || []) as any[];
+  return raw.map((k) => (typeof k === 'string' ? k : k?.pubkey)).filter(Boolean);
 }
 
-// store last N events
-function pushEvent(e: any) {
-  const key = 'events:list';
-  const arr = Vol.get<any[]>(key, [])!;
-  arr.push(e);
-  while (arr.length > 500) arr.shift();
-  Vol.set(key, arr);
+function pickSignature(body: any): string | undefined {
+  const s1 = body?.value?.transaction?.signatures?.[0];
+  const s2 = body?.transaction?.signatures?.[0];
+  const s3 = body?.message?.signature;
+  return s1 || s2 || s3;
+}
 
-  // counters
-  const ckey = 'events:count';
-  const cnt = Vol.get<Record<string, number>>(ckey, {})!;
-  const k = e.kind || 'other';
-  cnt[k] = (cnt[k] || 0) + 1;
-  Vol.set(ckey, cnt);
+function classify(body: any) {
+  const logs = pickLogs(body);
+  const keys = pickAccountKeys(body);
+  const touchesRaydium =
+    keys.includes(RAYDIUM_AMM) || logs.some((l) => l.includes(RAYDIUM_AMM));
+
+  const hasInit2 = logs.some((l) => l.includes('Instruction: Initialize2'));
+  const setAuth = logs.some((l) => l.toLowerCase().includes('instruction: setauthority'));
+  const noneAuth = logs.some((l) => /new authority:\s*none/i.test(l));
+  const burnLP = logs.some((l) => /instruction:\s*burn/i.test(l));
+
+  if (touchesRaydium && hasInit2) return 'raydium_pool_init2';
+  if (setAuth && noneAuth)        return 'authority_revoked';
+  if (burnLP && touchesRaydium)   return 'lp_burn';
+  return 'other';
 }
 
 export async function POST(req: Request) {
-  // quick visibility in logs (headers snapshot)
-  console.info('[webhook][quicknode][hdr]', {
-    authorization: req.headers.get('authorization') || '',
-    'x-qn-token': req.headers.get('x-qn-token') || '',
-    'x-quicknode-token': req.headers.get('x-quicknode-token') || '',
-    'x-security-token': req.headers.get('x-security-token') || '',
-    'x-webhook-token': req.headers.get('x-webhook-token') || '',
-    'x-verify-token': req.headers.get('x-verify-token') || '',
-    'x-token': req.headers.get('x-token') || '',
-    'x-auth-token': req.headers.get('x-auth-token') || '',
-    'x-api-key': req.headers.get('x-api-key') || '',
-    'quicknode-token': req.headers.get('quicknode-token') || '',
+  if (!okAuth(req)) return NextResponse.json({ ok: false, err: 'unauthorized' }, { status: 401 });
+
+  let body: any = null;
+  try { body = await req.json(); }
+  catch { /* not fatal */ }
+
+  const kind = classify(body);
+  const sig = pickSignature(body);
+  const sampleLogs = pickLogs(body);
+
+  // Nur WATCH-ONLY: wir fügen die Erkennung in die Watchlist ein, öffnen aber keine Position.
+  addSignal({
+    ts: Date.now(),
+    kind,
+    sig,
+    note: kind === 'raydium_pool_init2'
+      ? 'Neue Raydium-Pool-Erstinitialisierung erkannt.'
+      : kind === 'authority_revoked'
+      ? 'SetAuthority -> None erkannt.'
+      : kind === 'lp_burn'
+      ? 'LP Burn-Hinweis (SPL Token Burn) erkannt.'
+      : 'Event erkannt.',
+    sampleLogs,
   });
 
-  const auth = authorize(req);
-  if (!auth.ok) {
-    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
-  }
-
-  let body: any = {};
-  try { body = await req.json(); } catch { body = {}; }
-
-  const cls = classify(body);
-  const now = Date.now();
-
-  const rules = Vol.get<any>('rules') || {};
-  const active = Vol.getBoolean('bot.active', true);
-
-  // watch-only logging
-  pushEvent({
-    t: now,
-    kind: cls.kind,
-    active,
-    watchOnly: true,
-    rulesSnapshot: {
-      investUsd: rules?.investUsd,
-      minInvestUsd: rules?.minInvestUsd,
-      lpBurn: { ...(rules?.lpBurn || {}) },
-    },
-    raw: body,
-  });
-
-  // Always 200 — QuickNode erwartet schnelle Antwort
-  return NextResponse.json({ ok: true, kind: cls.kind });
-}
-
-// (optional) GET zum Debuggen: letzte Events
-export async function GET() {
-  const list = Vol.get<any[]>('events:list', [])!;
-  const counts = Vol.get<Record<string, number>>('events:count', {})!;
-  return NextResponse.json({ ok: true, counts, last: list.slice(-30).reverse() });
+  return NextResponse.json({ ok: true });
 }
