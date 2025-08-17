@@ -1,156 +1,159 @@
+// /app/api/webhooks/quicknode/route.ts
 import { NextResponse } from 'next/server';
-import { onTick } from '@/lib/paper/tick';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// ===== Helpers =====
+const TAG = '[webhook:quicknode]';
+
+type AuthResult = { ok: boolean; wantLen: number; gotLen: number; reason?: string };
+
+function corsHeaders() {
+  return {
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'POST,GET,OPTIONS',
+    'access-control-allow-headers': '*',
+  };
+}
+
+function pickHeader(req: Request, name: string): string {
+  return req.headers.get(name) || '';
+}
+
 function getQueryToken(req: Request): string {
-  try { return new URL(req.url).searchParams.get('token') || ''; }
-  catch { return ''; }
+  try {
+    return new URL(req.url).searchParams.get('token') || '';
+  } catch {
+    return '';
+  }
 }
 
 function getHeaderToken(req: Request): string {
-  const auth = req.headers.get('authorization') || '';
+  const auth = pickHeader(req, 'authorization');
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   const candidates = [
-    getQueryToken(req),
+    getQueryToken(req), // Query-Token hat Priorität
     bearer,
-    req.headers.get('x-qn-token') || '',
-    req.headers.get('x-quicknode-token') || '',
-    req.headers.get('x-security-token') || '',
-    req.headers.get('x-webhook-token') || '',
-    req.headers.get('x-verify-token') || '',
-    req.headers.get('x-token') || '',
-    req.headers.get('x-auth-token') || '',
-    req.headers.get('x-api-key') || '',
-    req.headers.get('quicknode-token') || '',
+    pickHeader(req, 'x-qn-token'),
+    pickHeader(req, 'x-quicknode-token'),
+    pickHeader(req, 'x-security-token'),
+    pickHeader(req, 'x-webhook-token'),
+    pickHeader(req, 'x-verify-token'),
+    pickHeader(req, 'x-token'),
+    pickHeader(req, 'x-auth-token'),
+    pickHeader(req, 'x-api-key'),
+    pickHeader(req, 'quicknode-token'),
   ].filter(Boolean);
-  return (candidates[0] as string) || '';
+  return candidates[0] || '';
 }
 
-function authOk(req: Request): boolean {
+function authorize(req: Request): AuthResult {
+  const allowUnsigned = process.env.QN_ALLOW_UNSIGNED === '1';
   const want = (process.env.QN_WEBHOOK_TOKEN as string) || '';
   const got = getHeaderToken(req);
-  if (!want) return true; // keine Sperre, falls Token nicht gesetzt (Dev)
-  return got === want;
+  const ok = allowUnsigned || !want || got === want;
+  return { ok, wantLen: want.length, gotLen: got.length, reason: ok ? undefined : 'token-mismatch' };
 }
 
-// Tiefes, defensives Feldsuchen
-function collectStrings(obj: any, out: string[] = [], depth = 0): string[] {
-  if (!obj || depth > 4) return out;
-  if (typeof obj === 'string') out.push(obj);
-  else if (Array.isArray(obj)) obj.forEach(v => collectStrings(v, out, depth + 1));
-  else if (typeof obj === 'object') {
-    for (const k of Object.keys(obj)) {
-      const v = (obj as any)[k];
-      if (typeof v === 'string') out.push(v);
-      else if (typeof v === 'object') collectStrings(v, out, depth + 1);
+async function readBody(req: Request): Promise<{ body: any; raw?: string }> {
+  const ct = (req.headers.get('content-type') || '').toLowerCase();
+  if (ct.includes('application/json')) {
+    try {
+      const body = await req.json();
+      return { body };
+    } catch (e: any) {
+      return { body: null, raw: undefined };
     }
   }
-  return out;
+  const raw = await req.text();
+  try {
+    return { body: JSON.parse(raw), raw };
+  } catch {
+    return { body: { raw }, raw };
+  }
 }
 
-function collectField(obj: any, keys: string[] = ['mint','tokenMint','baseMint','quoteMint']): string | null {
+function collectField(obj: any, keys: string[] = ['mint', 'tokenMint', 'baseMint', 'quoteMint']): string | null {
   if (!obj || typeof obj !== 'object') return null;
   for (const k of keys) {
-    if (typeof (obj as any)[k] === 'string') return (obj as any)[k] as string;
-  }
-  for (const v of Object.values(obj)) {
-    if (v && typeof v === 'object') {
-      const got = collectField(v as any, keys);
-      if (got) return got;
-    }
+    if (typeof obj[k] === 'string') return obj[k] as string;
   }
   return null;
 }
 
-function detectEvents(body: any): any[] {
-  const texts = collectStrings(body, []);
-  const textBlob = texts.join(' | ').toLowerCase();
+function extractEvents(payload: any): any[] {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
 
-  // Heuristik: Raydium Pool / AMM
-  const isRaydiumish =
-    /initialize|init[_ ]?pool|create[_ ]?pool|raydium|amm|liquidity add|add liquidity/i.test(textBlob);
+  if (Array.isArray(payload.events)) return payload.events;
+  if (payload.data && Array.isArray(payload.data.events)) return payload.data.events;
 
-  // Contract revoked / ownership renounced
-  const isRevoked =
-    /revoke|revoked|renounce|renounced|ownership removed|freeze_authority removed/i.test(textBlob);
+  const v = payload?.result?.value;
+  if (Array.isArray(v)) return v;
+  if (v && typeof v === 'object') return [v];
 
-  // LP burn (Watch-Only)
-  const isLpBurn =
-    /burn.*liquidity|liquidity.*burn|lp.*burn|burned lp|liq burned|burned liquidity/i.test(textBlob);
-
-  const mint = collectField(body);
-
-  const out: any[] = [];
-  if (isRaydiumish) {
-    out.push({
-      category: 'Raydium',
-      tag: 'pool_init_or_liquidity',
-      source: 'webhook:quicknode',
-      mint,
-      raw: undefined,
-    });
-  }
-  if (isRevoked) {
-    out.push({
-      category: 'Raydium',
-      tag: 'contract_revoked',
-      source: 'webhook:quicknode',
-      mint,
-      raw: undefined,
-    });
-  }
-  if (isLpBurn) {
-    out.push({
-      category: 'LIQ_BURN_MOMENTUM',
-      watchOnly: true,
-      tag: 'lp_burn_detected',
-      source: 'webhook:quicknode',
-      mint,
-      raw: undefined,
-    });
-  }
-  return out;
+  // Fallback: einzelne bekannte Felder in Array verpacken
+  if (payload.event) return [payload.event];
+  return [];
 }
 
-// ===== Routes =====
 export async function GET() {
-  return NextResponse.json({ ok: true, hint: 'POST QuickNode webhooks here' });
+  return NextResponse.json(
+    { ok: true, hint: 'POST QuickNode webhooks here', expects: '/api/webhooks/quicknode?token=YOUR_TOKEN' },
+    { headers: corsHeaders() }
+  );
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: corsHeaders() });
 }
 
 export async function POST(req: Request) {
-  console.info('[webhook:quicknode][hit]', {
-  ua: req.headers.get('user-agent') || '',
-  ct: req.headers.get('content-type') || '',
-  tokenLen: (getHeaderToken(req) || '').length,
-});
+  const t0 = Date.now();
+  const url = req.url;
+  const method = req.method;
+  const token = getHeaderToken(req);
 
-  if (!authOk(req)) {
-    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
-  }
-
-  let body: any = {};
-  try { body = await req.json(); } catch {}
-
-  const events = detectEvents(body);
-  const results: any[] = [];
-  for (const ev of events) {
-    try {
-      const res = await onTick(ev);
-      results.push({ ok: true, ev: ev.tag || ev.category, res });
-    } catch (e: any) {
-      results.push({ ok: false, ev: ev.tag || ev.category, error: String(e?.message || e) });
-    }
-  }
-  console.info('[webhook:quicknode][done]', { evCount: events.length, tags: events.map(e => e.tag || e.category) });
-
-
-  return NextResponse.json({
-    ok: true,
-    received: true,
-    evCount: events.length,
-    results,
+  console.info(`${TAG}[hit]`, {
+    method,
+    url,
+    tokenLen: token.length,
+    ct: pickHeader(req, 'content-type'),
+    clen: pickHeader(req, 'content-length'),
+    ua: pickHeader(req, 'user-agent'),
   });
+
+  const auth = authorize(req);
+  if (!auth.ok) {
+    console.warn(`${TAG}[unauthorized]`, { wantLen: auth.wantLen, gotLen: auth.gotLen, reason: auth.reason });
+    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401, headers: corsHeaders() });
+  }
+
+  const { body, raw } = await readBody(req);
+  if (!body) {
+    console.warn(`${TAG}[bad-body]`, { hasRaw: !!raw });
+    return NextResponse.json({ ok: false, error: 'bad-json' }, { status: 400, headers: corsHeaders() });
+  }
+
+  const events = extractEvents(body);
+  const sample = events.slice(0, 3).map((e: any) => ({
+    tag: e?.tag || e?.type || e?.event || null,
+    mint: collectField(e) || collectField(e?.accountData) || collectField(e?.meta) || null,
+  }));
+
+  console.info(`${TAG}[parsed]`, {
+    rootKeys: Object.keys(body || {}).slice(0, 10),
+    evCount: events.length,
+    sample,
+  });
+
+  // TODO: hier ggf. intern weiterleiten (Signal-Pipeline / Engine)
+  // Aktuell nur ACK + Logging.
+  const t1 = Date.now();
+  console.info(`${TAG}[done]`, { evCount: events.length, ms: t1 - t0 });
+
+  return NextResponse.json(
+    { ok: true, received: true, evCount: events.length, ms: t1 - t0 },
+    { headers: corsHeaders() }
+  );
 }
