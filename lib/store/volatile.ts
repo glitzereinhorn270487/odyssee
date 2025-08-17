@@ -29,22 +29,28 @@ export function merge(patch: Record<string, any>, rootKey = 'rules') {
   return next;
 }
 
-// keep it small + predictable
+function isObj(x: unknown): x is Record<string, any> {
+  return !!x && typeof x === 'object' && !Array.isArray(x);
+}
+
+// kleine, robuste Deep-Merge
 function deepMerge(a: any, b: any): any {
   if (Array.isArray(a) && Array.isArray(b)) return b.slice();
+
   if (isObj(a) && isObj(b)) {
-    const out: Record<string, any> = { ...a };
-    for (const k of Object.keys(b)) out[k] = deepMerge(a?.[k], b[k]);
+    const ao: Record<string, any> = a;
+    const bo: Record<string, any> = b;
+    const out: Record<string, any> = { ...ao };
+    for (const k of Object.keys(bo)) {
+      out[k] = deepMerge(ao[k], bo[k]);
+    }
     return out;
   }
+
   return b;
 }
 
-function isObj(x: any): x is object {
-  return x && typeof x === 'object' && !Array.isArray(x);
-}
-
-// async KV aliases (no-op wrappers for compatibility)
+// Async-Aliase (Kompatibilität)
 export async function kvGet<T = any>(key: string): Promise<T | undefined> {
   return get<T>(key);
 }
