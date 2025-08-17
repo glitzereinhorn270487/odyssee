@@ -1,92 +1,97 @@
 // /app/api/webhooks/quicknode/route.ts
 import { NextResponse } from 'next/server';
-import { addSignal } from '@/lib/watchlist';
+import { liqAdd } from '@/lib/experiments/liqlog';
 
 export const runtime = 'nodejs';
 
+// Raydium AMM + gängige Quote-Mints
 const RAYDIUM_AMM = '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8';
+const QUOTES = new Set<string>([
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
+  'So11111111111111111111111111111111111111112',  // wSOL
+]);
 
-function getQueryToken(req: Request): string {
-  try { return new URL(req.url).searchParams.get('token') || ''; }
-  catch { return ''; }
+function q(req: Request, key: string) {
+  try { return new URL(req.url).searchParams.get(key) || ''; } catch { return ''; }
 }
-
 function okAuth(req: Request) {
   const want = (process.env.QN_WEBHOOK_TOKEN || process.env.QNODE_WEBHOOK_TOKEN || '').trim();
-  if (!want) return true;                       // Kein Token hinterlegt -> akzeptieren (dev)
-  const got = getQueryToken(req).trim();
-  return got && got === want;
+  if (!want) return true;
+  const got = q(req, 'token').trim();
+  return !!got && got === want;
 }
 
 function pickLogs(body: any): string[] {
-  // Versuche mehrere mögliche Pfade aus QuickNode/Solana-Payloads
-  const fromValueMeta =
-    body?.value?.transaction?.meta?.logMessages ??
-    body?.value?.meta?.logMessages;
-
-  const fromMsg = body?.message?.logs;
-  const fromLogs = body?.logs;
-
-  const logs = (fromValueMeta || fromMsg || fromLogs || []) as any[];
-  return logs.filter((l) => typeof l === 'string').slice(0, 3); // kurz halten
+  const metaLogs = body?.value?.transaction?.meta?.logMessages ?? body?.value?.meta?.logMessages;
+  const msgLogs  = body?.message?.logs;
+  const logs     = (metaLogs || msgLogs || body?.logs || []) as any[];
+  return logs.filter((l) => typeof l === 'string').slice(0, 3);
 }
-
 function pickAccountKeys(body: any): string[] {
-  const keys1 = body?.message?.accountKeys;
-  const keys2 = body?.value?.transaction?.message?.accountKeys;
-  const raw = (keys1 || keys2 || []) as any[];
+  const k1 = body?.message?.accountKeys;
+  const k2 = body?.value?.transaction?.message?.accountKeys;
+  const raw = (k1 || k2 || []) as any[];
   return raw.map((k) => (typeof k === 'string' ? k : k?.pubkey)).filter(Boolean);
 }
-
 function pickSignature(body: any): string | undefined {
-  const s1 = body?.value?.transaction?.signatures?.[0];
-  const s2 = body?.transaction?.signatures?.[0];
-  const s3 = body?.message?.signature;
-  return s1 || s2 || s3;
+  return body?.value?.transaction?.signatures?.[0]
+      || body?.transaction?.signatures?.[0]
+      || body?.message?.signature;
 }
-
-function classify(body: any) {
+function touchesRaydium(body: any): boolean {
   const logs = pickLogs(body);
   const keys = pickAccountKeys(body);
-  const touchesRaydium =
-    keys.includes(RAYDIUM_AMM) || logs.some((l) => l.includes(RAYDIUM_AMM));
+  return keys.includes(RAYDIUM_AMM) || logs.some((l) => l.includes(RAYDIUM_AMM));
+}
+function isLpBurn(body: any): boolean {
+  const logs = pickLogs(body);
+  const burn = logs.some((l) => /instruction:\s*burn/i.test(l));
+  return burn && touchesRaydium(body);
+}
+function guessTargetMint(body: any): string | undefined {
+  const keys = pickAccountKeys(body);
+  return keys.find((k) => k && k.length >= 32 && !QUOTES.has(k) && k !== RAYDIUM_AMM);
+}
 
-  const hasInit2 = logs.some((l) => l.includes('Instruction: Initialize2'));
-  const setAuth = logs.some((l) => l.toLowerCase().includes('instruction: setauthority'));
-  const noneAuth = logs.some((l) => /new authority:\s*none/i.test(l));
-  const burnLP = logs.some((l) => /instruction:\s*burn/i.test(l));
-
-  if (touchesRaydium && hasInit2) return 'raydium_pool_init2';
-  if (setAuth && noneAuth)        return 'authority_revoked';
-  if (burnLP && touchesRaydium)   return 'lp_burn';
-  return 'other';
+// OPTIONAL: an alte Stream-Route weiterleiten, damit Papierhandel unverändert greift
+async function forwardToLegacy(req: Request) {
+  try {
+    const legacy = await import('../../streams/quicknode/route' as any);
+    if (legacy?.POST) {
+      const clone = req.clone();
+      // @ts-ignore
+      return legacy.POST(clone);
+    }
+  } catch {}
+  return null;
 }
 
 export async function POST(req: Request) {
-  if (!okAuth(req)) return NextResponse.json({ ok: false, err: 'unauthorized' }, { status: 401 });
+  if (!okAuth(req)) {
+    return NextResponse.json({ ok: false, err: 'unauthorized' }, { status: 401 });
+  }
 
   let body: any = null;
-  try { body = await req.json(); }
-  catch { /* not fatal */ }
+  try { body = await req.json(); } catch {}
 
-  const kind = classify(body);
-  const sig = pickSignature(body);
-  const sampleLogs = pickLogs(body);
+  // Watch-only: LP Burn erkennen und protokollieren
+  if (isLpBurn(body)) {
+    liqAdd({
+      ts: Date.now(),
+      kind: 'lp_burn',
+      mint: guessTargetMint(body),
+      sig: pickSignature(body),
+      sampleLogs: pickLogs(body),
+      note: 'LP Burn erkannt – WatchOnly (kein Trade).',
+    });
+  }
 
-  // Nur WATCH-ONLY: wir fügen die Erkennung in die Watchlist ein, öffnen aber keine Position.
-  addSignal({
-    ts: Date.now(),
-    kind,
-    sig,
-    note: kind === 'raydium_pool_init2'
-      ? 'Neue Raydium-Pool-Erstinitialisierung erkannt.'
-      : kind === 'authority_revoked'
-      ? 'SetAuthority -> None erkannt.'
-      : kind === 'lp_burn'
-      ? 'LP Burn-Hinweis (SPL Token Burn) erkannt.'
-      : 'Event erkannt.',
-    sampleLogs,
-  });
+  // Papierhandel normal weiterlaufen lassen (falls Legacy-Handler existiert)
+  const forwarded = await forwardToLegacy(req);
+  if (forwarded) return forwarded;
 
-  return NextResponse.json({ ok: true });
+  // Fallback: 200 antworten
+  return NextResponse.json({ ok: true, forwarded: false });
 }
+
