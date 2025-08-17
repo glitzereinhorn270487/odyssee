@@ -11,48 +11,34 @@ function getQueryToken(req: Request): string {
   catch { return ''; }
 }
 function getHeaderToken(req: Request): string {
-  const h = (name: string) => req.headers.get(name) || '';
+  const h = (n: string) => req.headers.get(n) || '';
   const auth = h('authorization');
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   const candidates = [
-    getQueryToken(req),
-    bearer,
-    h('x-qn-token'),
-    h('x-quicknode-token'),
-    h('x-security-token'),
-    h('x-webhook-token'),
-    h('x-verify-token'),
-    h('x-token'),
-    h('x-auth-token'),
-    h('x-api-key'),
-    h('quicknode-token'),
+    getQueryToken(req), bearer,
+    h('x-qn-token'), h('x-quicknode-token'), h('x-security-token'),
+    h('x-webhook-token'), h('x-verify-token'), h('x-token'),
+    h('x-auth-token'), h('x-api-key'), h('quicknode-token'),
   ].filter(Boolean);
   return candidates[0] || '';
 }
 function authorized(req: Request, wantEnv: string) {
   const allowUnsigned = process.env.QN_ALLOW_UNSIGNED === '1';
   const want = (process.env[wantEnv] as string) || '';
-  const got = getHeaderToken(req);
-  const ok = allowUnsigned || (!!want && got === want);
-  return ok;
+  const got  = getHeaderToken(req);
+  return allowUnsigned || (!!want && got === want);
 }
 
 export async function POST(req: Request) {
   if (!authorized(req, 'PUMPFUN_WEBHOOK_TOKEN')) {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   }
-
-  let body: any = null;
-  try { body = await req.json(); } catch {}
-
+  let body: any = null; try { body = await req.json(); } catch {}
   try {
     const bytes = Number(req.headers.get('content-length') || 0) || JSON.stringify(body ?? {}).length;
     meterPump.hits += 1; meterPump.bytes += bytes;
   } catch {}
-
-  // Optional: Engine triggern
-  // await fetch(new URL('/api/paper/tick', req.url), { method: 'POST', body: JSON.stringify({ source: 'pumpfun', data: body })}).catch(()=>{});
-
+  // hier ggf. Engine triggern
   return NextResponse.json({ ok: true });
 }
 
@@ -62,3 +48,10 @@ export async function GET(req: Request) {
   return NextResponse.json({ ok: true, meter: meterPump });
 }
 
+// <- Fix für 405
+export async function HEAD() {
+  return new Response(null, { status: 200, headers: { 'x-endpoint': 'pumpfun' } });
+}
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: { 'Allow': 'POST, GET, HEAD, OPTIONS' } });
+}
