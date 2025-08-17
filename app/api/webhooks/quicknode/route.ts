@@ -1,76 +1,51 @@
-// /app/api/webhooks/quicknode/route.ts
+// app/api/webhooks/quicknode/route.ts
 import { NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const TAG = '[webhook:quicknode]';
-
-type AuthResult = { ok: boolean; wantLen: number; gotLen: number; reason?: string };
-
-function corsHeaders() {
-  return {
-    'access-control-allow-origin': '*',
-    'access-control-allow-methods': 'POST,GET,OPTIONS',
-    'access-control-allow-headers': '*',
-  };
-}
-
-function pickHeader(req: Request, name: string): string {
-  return req.headers.get(name) || '';
-}
+const RAYDIUM_AMM = '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8';
 
 function getQueryToken(req: Request): string {
-  try {
-    return new URL(req.url).searchParams.get('token') || '';
-  } catch {
-    return '';
-  }
+  try { return new URL(req.url).searchParams.get('token') || ''; }
+  catch { return ''; }
 }
 
 function getHeaderToken(req: Request): string {
-  const auth = pickHeader(req, 'authorization');
+  const auth = req.headers.get('authorization') || '';
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   const candidates = [
-    getQueryToken(req), // Query-Token hat Priorität
+    getQueryToken(req),
     bearer,
-    pickHeader(req, 'x-qn-token'),
-    pickHeader(req, 'x-quicknode-token'),
-    pickHeader(req, 'x-security-token'),
-    pickHeader(req, 'x-webhook-token'),
-    pickHeader(req, 'x-verify-token'),
-    pickHeader(req, 'x-token'),
-    pickHeader(req, 'x-auth-token'),
-    pickHeader(req, 'x-api-key'),
-    pickHeader(req, 'quicknode-token'),
+    req.headers.get('x-qn-token') || '',
+    req.headers.get('x-quicknode-token') || '',
+    req.headers.get('x-security-token') || '',
+    req.headers.get('x-webhook-token') || '',
+    req.headers.get('x-verify-token') || '',
+    req.headers.get('x-token') || '',
+    req.headers.get('x-auth-token') || '',
+    req.headers.get('x-api-key') || '',
+    req.headers.get('quicknode-token') || '',
   ].filter(Boolean);
   return candidates[0] || '';
 }
 
-function authorize(req: Request): AuthResult {
-  const allowUnsigned = process.env.QN_ALLOW_UNSIGNED === '0';
-  const want = (process.env.QN_WEBHOOK_TOKEN as string) || '';
+function authorize(req: Request, envVarName = 'QN_WEBHOOK_TOKEN') {
+  const allowUnsigned = process.env.QN_ALLOW_UNSIGNED === '1';
+  const want = (process.env[envVarName] as string) || '';
   const got = getHeaderToken(req);
-  const ok = allowUnsigned || !want || got === want;
-  return { ok, wantLen: want.length, gotLen: got.length, reason: ok ? undefined : 'token-mismatch' };
+  const ok = allowUnsigned || (!!want && got === want);
+  return { ok, wantLen: (want || '').length, gotLen: (got || '').length, reason: ok ? 'ok' : (allowUnsigned ? 'unsigned-allowed' : 'token-mismatch') };
 }
 
-async function readBody(req: Request): Promise<{ body: any; raw?: string }> {
-  const ct = (req.headers.get('content-type') || '').toLowerCase();
-  if (ct.includes('application/json')) {
-    try {
-      const body = await req.json();
-      return { body };
-    } catch (e: any) {
-      return { body: null, raw: undefined };
-    }
-  }
-  const raw = await req.text();
-  try {
-    return { body: JSON.parse(raw), raw };
-  } catch {
-    return { body: { raw }, raw };
-  }
+function toArray<T>(x: T | T[] | null | undefined): T[] {
+  if (x == null) return [];
+  return Array.isArray(x) ? x : [x];
+}
+
+function normalizeKeys(arr: any): string[] {
+  const a = toArray(arr);
+  return a.map(k => (typeof k === 'string' ? k : (k?.pubkey || ''))).filter(Boolean);
 }
 
 function collectField(obj: any, keys: string[] = ['mint', 'tokenMint', 'baseMint', 'quoteMint']): string | null {
@@ -81,79 +56,100 @@ function collectField(obj: any, keys: string[] = ['mint', 'tokenMint', 'baseMint
   return null;
 }
 
-function extractEvents(payload: any): any[] {
-  if (!payload) return [];
-  if (Array.isArray(payload)) return payload;
-
-  if (Array.isArray(payload.events)) return payload.events;
-  if (payload.data && Array.isArray(payload.data.events)) return payload.data.events;
-
-  const v = payload?.result?.value;
-  if (Array.isArray(v)) return v;
-  if (v && typeof v === 'object') return [v];
-
-  // Fallback: einzelne bekannte Felder in Array verpacken
-  if (payload.event) return [payload.event];
+function extractLogs(node: any): string[] {
+  const cands = [
+    node?.meta?.logMessages,
+    node?.transaction?.meta?.logMessages,
+    node?.value?.transaction?.meta?.logMessages,
+    node?.message?.logs, // falls QuickNode so nennt
+  ];
+  for (const c of cands) {
+    const arr = toArray<string>(c);
+    if (arr.length) return arr.filter(x => typeof x === 'string');
+  }
   return [];
 }
 
-export async function GET() {
-  return NextResponse.json(
-    { ok: true, hint: 'POST QuickNode webhooks here', expects: '/api/webhooks/quicknode?token=YOUR_TOKEN' },
-    { headers: corsHeaders() }
-  );
+function extractAccountKeys(node: any): string[] {
+  const cands = [
+    node?.transaction?.message?.accountKeys,
+    node?.value?.transaction?.message?.accountKeys,
+    node?.message?.accountKeys,
+  ];
+  for (const c of cands) {
+    const arr = normalizeKeys(c);
+    if (arr.length) return arr;
+  }
+  return [];
 }
 
-export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: corsHeaders() });
+function* iterTransactions(body: any) {
+  // QuickNode liefert i.d.R. { transactions: [ ... ] }
+  for (const t of toArray(body?.transactions)) yield t;
+
+  // Fallbacks: manchmal steckt das Ding eine Ebene tiefer/anders
+  if (body?.transaction || body?.value?.transaction) yield body;
+  if (body?.result?.transaction) yield body.result; // RPC-ähnlich
+}
+
+function isRaydiumInit2(node: any): boolean {
+  const logs = extractLogs(node);
+  const hasInit2 = logs.some((l) => typeof l === 'string' && /Initialize2/i.test(l));
+  const keys = extractAccountKeys(node);
+  const touchesRaydium = keys.includes(RAYDIUM_AMM) || logs.some((l) => l.includes(RAYDIUM_AMM));
+  return hasInit2 && touchesRaydium;
+}
+
+async function parseBody(req: Request) {
+  const ct = (req.headers.get('content-type') || '').toLowerCase();
+  let text = '';
+  try { text = await req.text(); } catch {}
+  if (!text) return { ok: false as const, body: null, hasRaw: false, ct };
+  try {
+    const body = JSON.parse(text);
+    return { ok: true as const, body, hasRaw: true, ct };
+  } catch (e) {
+    console.warn('[webhook:quicknode][bad-json]', { ct, preview: text.slice(0, 200) });
+    return { ok: false as const, body: null, hasRaw: true, ct };
+  }
 }
 
 export async function POST(req: Request) {
   const t0 = Date.now();
   const url = req.url;
-  const method = req.method;
-  const token = getHeaderToken(req);
+  const auth = authorize(req, 'QN_WEBHOOK_TOKEN');
 
-  console.info(`${TAG}[hit]`, {
-    method,
+  console.info('[webhook:quicknode][hit]', {
+    method: req.method,
     url,
-    tokenLen: token.length,
-    ct: pickHeader(req, 'content-type'),
-    clen: pickHeader(req, 'content-length'),
-    ua: pickHeader(req, 'user-agent'),
+    tokenLen: getHeaderToken(req).length,
+    ct: req.headers.get('content-type'),
+    clen: req.headers.get('content-length'),
+    ua: req.headers.get('user-agent')
   });
 
-  const auth = authorize(req);
   if (!auth.ok) {
-    console.warn(`${TAG}[unauthorized]`, { wantLen: auth.wantLen, gotLen: auth.gotLen, reason: auth.reason });
-    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401, headers: corsHeaders() });
+    console.warn('[webhook:quicknode][unauthorized]', { wantLen: auth.wantLen, gotLen: auth.gotLen, reason: auth.reason });
+    return NextResponse.json({ ok: false, unauthorized: true }, { status: 401 });
   }
 
-  const { body, raw } = await readBody(req);
-  if (!body) {
-    console.warn(`${TAG}[bad-body]`, { hasRaw: !!raw });
-    return NextResponse.json({ ok: false, error: 'bad-json' }, { status: 400, headers: corsHeaders() });
+  const parsed = await parseBody(req);
+  if (!parsed.ok || !parsed.body) {
+    console.warn('[webhook:quicknode][bad-body]', { hasRaw: parsed.hasRaw });
+    return NextResponse.json({ ok: false, error: 'bad-body' }, { status: 200 });
   }
 
-  const events = extractEvents(body);
-  const sample = events.slice(0, 3).map((e: any) => ({
-    tag: e?.tag || e?.type || e?.event || null,
-    mint: collectField(e) || collectField(e?.accountData) || collectField(e?.meta) || null,
-  }));
+  let txs = 0;
+  let matches = 0;
+  for (const node of iterTransactions(parsed.body)) {
+    txs++;
+    if (isRaydiumInit2(node)) matches++;
+  }
 
-  console.info(`${TAG}[parsed]`, {
-    rootKeys: Object.keys(body || {}).slice(0, 10),
-    evCount: events.length,
-    sample,
-  });
+  console.info('[webhook:quicknode][batch]', { txs, matches, ms: Date.now() - t0 });
+  return NextResponse.json({ ok: true, received: true, txs, matches, ms: Date.now() - t0 });
+}
 
-  // TODO: hier ggf. intern weiterleiten (Signal-Pipeline / Engine)
-  // Aktuell nur ACK + Logging.
-  const t1 = Date.now();
-  console.info(`${TAG}[done]`, { evCount: events.length, ms: t1 - t0 });
-
-  return NextResponse.json(
-    { ok: true, received: true, evCount: events.length, ms: t1 - t0 },
-    { headers: corsHeaders() }
-  );
+export async function GET() {
+  return NextResponse.json({ ok: true, info: 'QuickNode webhook is up' });
 }
