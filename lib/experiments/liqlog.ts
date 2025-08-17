@@ -1,27 +1,52 @@
-// /lib/experiments/liqlog.ts
-type LqLog = {
-  ts: number;
-  kind: 'lp_burn';
-  mint?: string;
-  sig?: string;
-  sampleLogs?: string[];
-  note?: string;
-};
+// Lightweight Log-Speicher für die Watch-Only Kategorie "LIQ burned Momentum"
+let mem: any[] = (globalThis as any).__liqlog || [];
+(globalThis as any).__liqlog = mem;
 
-const g = globalThis as any;
-if (!g.__LIQ_LOG__) g.__LIQ_LOG__ = [] as LqLog[];
-
-export function liqAdd(entry: LqLog) {
-  const arr = g.__LIQ_LOG__ as LqLog[];
-  arr.unshift(entry);
-  if (arr.length > 400) arr.length = 400;
+async function loadKV() {
+  try {
+    const mod = await import('@/lib/store/volatile');
+    return mod;
+  } catch {
+    return {};
+  }
 }
 
-export function liqList(limit = 100): LqLog[] {
-  const arr = (globalThis as any).__LIQ_LOG__ as LqLog[];
-  return Array.isArray(arr) ? arr.slice(0, limit) : [];
+const KEY = 'exp:liq';
+
+export async function liqAdd(entry: any) {
+  // Minimale Normalisierung
+  const e = {
+    ts: Date.now(),
+    kind: 'LIQ_BURN_MOMENTUM',
+    ...entry,
+  };
+  mem.push(e);
+  try {
+    const KV: any = await loadKV();
+    // best-effort persist
+    const prev = (await KV.kvGet?.(KEY)) || [];
+    const next = [...prev, e].slice(-2000); // begrenzen
+    await KV.kvSet?.(KEY, next);
+  } catch {}
+  return e;
 }
 
-export function liqClear() {
-  (globalThis as any).__LIQ_LOG__ = [];
+export async function liqList() {
+  try {
+    const KV: any = await loadKV();
+    const arr = (await KV.kvGet?.(KEY)) || mem || [];
+    return arr;
+  } catch {
+    return mem;
+  }
+}
+
+export async function liqClear() {
+  mem = [];
+  (globalThis as any).__liqlog = mem;
+  try {
+    const KV: any = await loadKV();
+    await KV.kvSet?.(KEY, []);
+  } catch {}
+  return { ok: true, cleared: true };
 }
