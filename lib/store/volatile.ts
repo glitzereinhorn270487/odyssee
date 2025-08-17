@@ -1,45 +1,54 @@
-// Simple In-Memory "KV"-Store für Runtime (Vercel/Node).
-// Bietet sync- und async-APIs, plus Utility-Helper die anderswo importiert werden.
+// lib/store/volatile.ts
+type JSONValue = any;
 
-const mem = new Map<string, any>();
+const mem = new Map<string, JSONValue>();
 
-// ---------- Sync API ----------
-export function set(key: string, value: any): void {
-  mem.set(key, value);
+export function get<T = any>(key: string, def?: T): T {
+  return (mem.has(key) ? mem.get(key) : def) as T;
 }
 
-export function get<T = any>(key: string, def?: T): T | undefined {
-  return mem.has(key) ? (mem.get(key) as T) : def;
+export function set<T = any>(key: string, val: T): void {
+  mem.set(key, val);
 }
 
 export function getBoolean(key: string, def = false): boolean {
-  const v = mem.get(key);
-  if (typeof v === 'boolean') return v;
-  if (typeof v === 'string') {
-    if (v.toLowerCase() === 'true') return true;
-    if (v.toLowerCase() === 'false') return false;
-  }
-  return def;
+  const v = get<any>(key);
+  return typeof v === 'boolean' ? v : Boolean(def);
 }
 
 export function getNumber(key: string, def = 0): number {
-  const v = mem.get(key);
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
-  const n = Number(v);
+  const v = get<any>(key);
+  const n = typeof v === 'number' ? v : Number.NaN;
   return Number.isFinite(n) ? n : def;
 }
 
-// Patch-artige Zuweisung für Settings o.ä.
-export function merge(patch: Record<string, any>): void {
-  for (const [k, v] of Object.entries(patch)) {
-    mem.set(k, v);
-  }
+export function merge(patch: Record<string, any>, rootKey = 'rules') {
+  const cur = get<Record<string, any>>(rootKey, {});
+  const next = deepMerge(cur, patch);
+  set(rootKey, next);
+  return next;
 }
 
-// ---------- Async Aliase (kompatibel zu bestehendem Code) ----------
-export async function kvSet(key: string, value: any): Promise<void> {
-  set(key, value);
+// keep it small + predictable
+function deepMerge(a: any, b: any): any {
+  if (Array.isArray(a) && Array.isArray(b)) return b.slice();
+  if (isObj(a) && isObj(b)) {
+    const out: Record<string, any> = { ...a };
+    for (const k of Object.keys(b)) out[k] = deepMerge(a?.[k], b[k]);
+    return out;
+  }
+  return b;
 }
+
+function isObj(x: any): x is object {
+  return x && typeof x === 'object' && !Array.isArray(x);
+}
+
+// async KV aliases (no-op wrappers for compatibility)
 export async function kvGet<T = any>(key: string): Promise<T | undefined> {
   return get<T>(key);
+}
+
+export async function kvSet<T = any>(key: string, val: T): Promise<void> {
+  set(key, val);
 }
