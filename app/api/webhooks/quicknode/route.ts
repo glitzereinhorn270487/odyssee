@@ -121,6 +121,12 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  console.info('[webhook:quicknode][hit]', {
+  ua: req.headers.get('user-agent') || '',
+  ct: req.headers.get('content-type') || '',
+  tokenLen: (getHeaderToken(req) || '').length,
+});
+
   if (!authOk(req)) {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   }
@@ -138,6 +144,8 @@ export async function POST(req: Request) {
       results.push({ ok: false, ev: ev.tag || ev.category, error: String(e?.message || e) });
     }
   }
+  console.info('[webhook:quicknode][done]', { evCount: events.length, tags: events.map(e => e.tag || e.category) });
+
 
   return NextResponse.json({
     ok: true,
