@@ -26,10 +26,10 @@ function getHeaderToken(req: Request): string {
     req.headers.get('x-api-key') || '',
     req.headers.get('quicknode-token') || '',
   ].filter(Boolean);
-  return candidates[0] || '';
+  return (candidates[0] as string) || '';
 }
 
-function authOk(req: Request) {
+function authOk(req: Request): boolean {
   const want = (process.env.QN_WEBHOOK_TOKEN as string) || '';
   const got = getHeaderToken(req);
   if (!want) return true; // keine Sperre, falls Token nicht gesetzt (Dev)
@@ -43,7 +43,7 @@ function collectStrings(obj: any, out: string[] = [], depth = 0): string[] {
   else if (Array.isArray(obj)) obj.forEach(v => collectStrings(v, out, depth + 1));
   else if (typeof obj === 'object') {
     for (const k of Object.keys(obj)) {
-      const v = obj[k];
+      const v = (obj as any)[k];
       if (typeof v === 'string') out.push(v);
       else if (typeof v === 'object') collectStrings(v, out, depth + 1);
     }
@@ -51,10 +51,10 @@ function collectStrings(obj: any, out: string[] = [], depth = 0): string[] {
   return out;
 }
 
-function collectField(obj: any, keys: string[] = ['mint','tokenMint','baseMint','quoteMint']) {
+function collectField(obj: any, keys: string[] = ['mint','tokenMint','baseMint','quoteMint']): string | null {
   if (!obj || typeof obj !== 'object') return null;
   for (const k of keys) {
-    if (typeof obj[k] === 'string') return obj[k];
+    if (typeof (obj as any)[k] === 'string') return (obj as any)[k] as string;
   }
   for (const v of Object.values(obj)) {
     if (v && typeof v === 'object') {
@@ -65,12 +65,11 @@ function collectField(obj: any, keys: string[] = ['mint','tokenMint','baseMint',
   return null;
 }
 
-function detectEvents(body: any) {
+function detectEvents(body: any): any[] {
   const texts = collectStrings(body, []);
   const textBlob = texts.join(' | ').toLowerCase();
 
-  // Heuristik: Raydium Pool (Program-ID wird meist vom QuickNode-Filter schon ausgesiebt)
-  const raydiumProgram = '675kpx9mhtjs2zt1qfr1nyhuzelx...'.slice(0, 10); // nur Info
+  // Heuristik: Raydium Pool / AMM
   const isRaydiumish =
     /initialize|init[_ ]?pool|create[_ ]?pool|raydium|amm|liquidity add|add liquidity/i.test(textBlob);
 
@@ -82,7 +81,7 @@ function detectEvents(body: any) {
   const isLpBurn =
     /burn.*liquidity|liquidity.*burn|lp.*burn|burned lp|liq burned|burned liquidity/i.test(textBlob);
 
-  const mint = collectField(body) || null;
+  const mint = collectField(body);
 
   const out: any[] = [];
   if (isRaydiumish) {
@@ -91,7 +90,7 @@ function detectEvents(body: any) {
       tag: 'pool_init_or_liquidity',
       source: 'webhook:quicknode',
       mint,
-      raw: undefined, // groß nicht zurückschieben
+      raw: undefined,
     });
   }
   if (isRevoked) {
@@ -113,7 +112,6 @@ function detectEvents(body: any) {
       raw: undefined,
     });
   }
-  // Falls nichts klar erkannt: lieber still durchwinken
   return out;
 }
 
