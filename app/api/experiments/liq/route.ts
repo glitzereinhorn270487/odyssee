@@ -1,15 +1,15 @@
-// /app/api/experiments/liq/route.ts
 import { NextResponse } from 'next/server';
 import { liqList, liqClear } from '@/lib/experiments/liqlog';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const items = liqList(100);
-  return NextResponse.json({ ok: true, count: items.length, items });
+  const data = await liqList();
+  return NextResponse.json({ ok: true, count: data.length, data });
 }
 
 export async function DELETE() {
-  liqClear();
-  return NextResponse.json({ ok: true, cleared: true });
+  const res = await liqClear();
+  return NextResponse.json(res);
 }
