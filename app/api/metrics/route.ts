@@ -1,23 +1,17 @@
 import { NextResponse } from 'next/server';
-import { kvGet } from '@/lib/store/volatile';
 
+// Da die Webhook-Module-scope Variablen nicht direkt hier verfügbar sind,
+// liefern wir nur einen "ping" und leiten die Detail-Meter über deren GET aus.
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function mb(n: number) { return Math.round((n / 1_000_000) * 100) / 100; }
-
-export async function GET() {
-  const qC = Number(await kvGet('metrics:quicknode:count')) || 0;
-  const qB = Number(await kvGet('metrics:quicknode:bytes')) || 0;
-  const pC = Number(await kvGet('metrics:pumpfun:count')) || 0;
-  const pB = Number(await kvGet('metrics:pumpfun:bytes')) || 0;
-
+export async function GET(req: Request) {
+  const base = new URL(req.url);
+  const qn = await fetch(new URL('/api/webhooks/quicknode', base)).then(r => r.json()).catch(()=>({}));
+  const pf = await fetch(new URL('/api/webhooks/pumpfun', base)).then(r => r.json()).catch(()=>({}));
   return NextResponse.json({
     ok: true,
-    webhooks: {
-      quicknode: { count: qC, bytes: qB, approxMB: mb(qB) },
-      pumpfun:   { count: pC, bytes: pB, approxMB: mb(pB) },
-      totalMB: mb(qB + pB)
-    }
+    quicknode: qn?.meter ?? null,
+    pumpfun: pf?.meter ?? null,
   });
 }
