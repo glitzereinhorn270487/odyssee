@@ -3,55 +3,68 @@ import { NextResponse } from 'next/server';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-type Meter = { hits: number; bytes: number; since: number };
-const meterQuickNode: Meter = { hits: 0, bytes: 0, since: Date.now() };
-
-function getQueryToken(req: Request): string {
-  try { return new URL(req.url).searchParams.get('token') || ''; }
-  catch { return ''; }
+function q(url: string) {
+  try { return new URL(url).searchParams.get('token') || ''; } catch { return ''; }
 }
-function getHeaderToken(req: Request): string {
-  const h = (n: string) => req.headers.get(n) || '';
-  const auth = h('authorization');
+function tokenFrom(req: Request) {
+  const auth = req.headers.get('authorization') || '';
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  const candidates = [
-    getQueryToken(req), bearer,
-    h('x-qn-token'), h('x-quicknode-token'), h('x-security-token'),
-    h('x-webhook-token'), h('x-verify-token'), h('x-token'),
-    h('x-auth-token'), h('x-api-key'), h('quicknode-token'),
+  const cands = [
+    q(req.url),
+    bearer,
+    req.headers.get('x-webhook-token') || '',
+    req.headers.get('x-verify-token') || '',
+    req.headers.get('x-token') || '',
+    req.headers.get('x-api-key') || '',
   ].filter(Boolean);
-  return candidates[0] || '';
+  return cands[0] || '';
 }
-function authorized(req: Request, wantEnv: string) {
-  const allowUnsigned = process.env.QN_ALLOW_UNSIGNED === '1';
-  const want = (process.env[wantEnv] as string) || '';
-  const got  = getHeaderToken(req);
-  return allowUnsigned || (!!want && got === want);
+function authorize(req: Request, envVar: string) {
+  const want = (process.env[envVar] as string) || '';
+  const got = tokenFrom(req);
+  return !!want && got === want;
 }
 
-export async function POST(req: Request) {
-  if (!authorized(req, 'QN_WEBHOOK_TOKEN')) {
+function anyLogMatches(payload: any, re: RegExp): boolean {
+  const txs =
+    payload?.transactions ??
+    payload?.result?.value?.block?.transactions ??
+    [];
+  for (const t of txs) {
+    const logs: string[] = t?.meta?.logMessages ?? [];
+    for (const line of logs) if (re.test(line)) return true;
+  }
+  return false;
+}
+
+async function handler(req: Request) {
+  if (!authorize(req, 'QN_WEBHOOK_TOKEN')) {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   }
-  let body: any = null; try { body = await req.json(); } catch {}
-  try {
-    const bytes = Number(req.headers.get('content-length') || 0) || JSON.stringify(body ?? {}).length;
-    meterQuickNode.hits += 1; meterQuickNode.bytes += bytes;
-  } catch {}
-  // hier ggf. Engine triggern
-  return NextResponse.json({ ok: true });
+  if (req.method !== 'POST') return NextResponse.json({ ok: true, method: req.method });
+
+  let payload: any = null;
+  try { payload = await req.json(); } catch {}
+
+  // Raydium/Swap/AMM/Pool/Route/Fills
+  const matched = anyLogMatches(
+    payload,
+    /(raydium|swap|trade|amm|pool|liquidity|route|fill)/i
+  );
+
+  if (!matched) {
+    return NextResponse.json({ ok: true, filtered: true });
+  }
+
+  // TODO: an Engine weiterreichen
+  console.info('[quicknode match]', JSON.stringify(payload).slice(0, 1500));
+  return NextResponse.json({ ok: true, matched: true });
 }
 
-export async function GET(req: Request) {
-  const expose = process.env.QN_ALLOW_UNSIGNED === '1' || authorized(req, 'QN_WEBHOOK_TOKEN');
-  if (!expose) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
-  return NextResponse.json({ ok: true, meter: meterQuickNode });
-}
+export async function GET(req: Request)     { return handler(req); }
+export async function HEAD(req: Request)    { return handler(req); }
+export async function OPTIONS(req: Request) { return handler(req); }
+export async function POST(req: Request)    { return handler(req); }
+export async function PUT(req: Request)     { return handler(req); }
+export async function PATCH(req: Request)   { return handler(req); }
 
-// <- QuickNode "testet" oft per HEAD/OPTIONS. Gib 200/204 zurück, ohne Auth-Zwang.
-export async function HEAD() {
-  return new Response(null, { status: 200, headers: { 'x-endpoint': 'quicknode' } });
-}
-export async function OPTIONS() {
-  return new Response(null, { status: 204, headers: { 'Allow': 'POST, GET, HEAD, OPTIONS' } });
-}
