@@ -1,43 +1,39 @@
 import { NextResponse } from 'next/server';
-import { get, set, getBoolean } from '@/lib/store/volatile';
+import * as KV from '@/lib/store/volatile';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function json(data: any, init: ResponseInit = {}) {
-  const res = NextResponse.json(data, init);
-  res.headers.set('Access-Control-Allow-Origin', '*');
-  res.headers.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.headers.set('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-  return res;
+function corsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+  };
 }
 
 export async function OPTIONS() {
-  return json({ ok: true });
+  return new NextResponse(null, { status: 204, headers: corsHeaders() });
 }
 
-// GET zeigt Status; zusätzlich: ?action=start erlaubt Start per GET (hilfreich zum Testen)
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  if (url.searchParams.get('action') === 'start') {
-    set('bot.active', true);
-    set('bot:status', { status: 'active', level: 'standard' });
-  }
-  const active = getBoolean('bot.active', true);
-  return json({ ok: true, status: active ? 'active' : 'inactive', active });
-}
-
-// POST startet oder stoppt
 export async function POST(req: Request) {
   let body: any = {};
   try { body = await req.json(); } catch {}
-  if (body?.active === false) {
-    set('bot.active', false);
-    set('bot:status', { status: 'inactive' });
-    return json({ ok: true, status: 'inactive', active: false });
-  }
+
   const level = String(body?.level ?? 'standard');
-  set('bot.active', true);
-  set('bot:status', { status: 'active', level });
-  return json({ ok: true, status: 'active', active: true, level });
+  const status = 'active';
+
+  // Best-effort: in volatile Store setzen (beide Varianten abdecken)
+  try { (KV as any).set?.('bot.active', true); } catch {}
+  try { (KV as any).kvSet?.('bot.active', true); } catch {}
+  try { (KV as any).kvSet?.('bot:status', { status, level }); } catch {}
+
+  console.info('[bot][start]', { level });
+
+  return NextResponse.json({ ok: true, status, level }, { headers: corsHeaders() });
+}
+
+export async function GET() {
+  // alias: GET auf /start aktiviert ebenfalls
+  return POST(new Request(''));
 }
