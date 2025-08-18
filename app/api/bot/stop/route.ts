@@ -4,10 +4,31 @@ import * as KV from '@/lib/store/volatile';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+function corsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+  };
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: corsHeaders() });
+}
+
 export async function POST() {
-  try {
-    KV.set('bot.active', false);
-    await KV.kvSet('bot:status', { status: 'inactive', level: 'standard' });
-  } catch {}
-  return NextResponse.json({ ok: true, status: 'inactive' });
+  const status = 'inactive';
+
+  try { (KV as any).set?.('bot.active', false); } catch {}
+  try { (KV as any).kvSet?.('bot.active', false); } catch {}
+  try { (KV as any).kvSet?.('bot:status', { status }); } catch {}
+
+  console.info('[bot][stop]');
+
+  return NextResponse.json({ ok: true, status }, { headers: corsHeaders() });
+}
+
+export async function GET() {
+  // alias: GET auf /stop stoppt ebenfalls
+  return POST();
 }
